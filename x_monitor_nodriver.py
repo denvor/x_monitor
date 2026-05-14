@@ -456,6 +456,15 @@ class Monitor:
             if result.expired:
                 log(f"❌ Cookie expired for @{handle}")
                 return AccountResult(handle=handle, status=FetchStatus.EXPIRED)
+
+            # Deduplicate: keep only tweets newer than cached max ID
+            cached_id = self.cache.get(handle)
+            if cached_id:
+                cached_num = int(cached_id)
+                new_tweets = [t for t in result.tweets if t.id_numeric > cached_num]
+                log(f"   [DEDUP] @{handle}: cached_id={cached_num}, fetched={len(result.tweets)}, new={len(new_tweets)}")
+                result.tweets = new_tweets
+
             if result.tweets:
                 return AccountResult(handle=handle, tweets=result.tweets)
             log(f"   Attempt {attempt+1}: got {len(result.tweets) if result.tweets else 0} tweets")
