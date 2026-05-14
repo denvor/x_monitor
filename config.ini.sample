@@ -1,0 +1,12 @@
+[feishu]
+app_id = 
+app_secret = 
+chat_id = 
+
+[monitor]
+handles = binancezh, binancewallet
+fetch_count = 3
+
+[retry]
+max_retries = 2
+retry_delay = 3
