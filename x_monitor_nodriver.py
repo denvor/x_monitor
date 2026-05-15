@@ -20,6 +20,8 @@ from enum import Enum
 from typing import Optional
 
 import nodriver as uc
+from nodriver.cdp import network
+from nodriver.cdp.network import CookieParam
 
 # ── Data Models ─────────────────────────────────────────────────────
 
@@ -161,6 +163,24 @@ log = _setup_logger().info
 # ── Browser Session ─────────────────────────────────────────────────
 
 
+def _load_cookies(path: str) -> list[CookieParam]:
+    """Load cookies from a Firefox-format cookies.json and convert to CDP CookieParam."""
+    try:
+        with open(path, "r") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    cookies: list[CookieParam] = []
+    for c in raw:
+        name = c.get("name", "").strip()
+        value = c.get("value", "").strip()
+        if not name or not value:
+            continue
+        cookies.append(CookieParam(name=name, value=value, domain=c.get("domain", "")))
+    return cookies
+
+
 class BrowserSession:
     """Manage nodriver browser connection and tweet extraction."""
 
@@ -200,6 +220,22 @@ class BrowserSession:
         return cls._browser
 
     @classmethod
+    async def _inject_cookies(cls, tab: "uc.Tab") -> None:
+        """Inject cookies from cookies.json into the browser via CDP."""
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        cookie_file = os.path.join(_script_dir, "cookies.json")
+        cookies = _load_cookies(cookie_file)
+        if not cookies:
+            log("[COOKIE] cookies.json not found or empty, skipping injection")
+            return
+        try:
+            gen = network.set_cookies(cookies=cookies)
+            await tab.send(gen)
+            log(f"[COOKIE] Injected {len(cookies)} cookies for {tab.url}")
+        except Exception as e:
+            log(f"[COOKIE] Failed to inject cookies: {e}")
+
+    @classmethod
     async def fetch_tweets(cls, handle: str, config: Config) -> FetchResult:
         browser = await cls._get_browser()
 
@@ -212,6 +248,8 @@ class BrowserSession:
 
         if target is None:
             target = await browser.get(f"https://x.com/{handle}")
+            # No existing tab means no cookies yet — inject them
+            await cls._inject_cookies(target)
         else:
             await target.get(f"https://x.com/{handle}")
 
