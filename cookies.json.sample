@@ -10,7 +10,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "v1%3A177002427108276127"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -23,7 +23,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "v1%3A177002427108276127"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -36,7 +36,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "v1%3A177002427108276127"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -49,7 +49,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "\"v1_Oowae3NS6rtsEGqkP2fFsw==\""
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -62,7 +62,7 @@
     "secure": false,
     "session": false,
     "storeId": "0",
-    "value": "0e4076ff53f34a34935e529bf93b04dc"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": "x.com",
@@ -75,7 +75,7 @@
     "secure": false,
     "session": false,
     "storeId": "0",
-    "value": "{\"i_l\":0,\"i_ll\":1770024338088,\"i_b\":\"HE/fBlkgpYrlX1DPkTLV1LTuYzjWdr6atUasfdICW40\",\"i_e\":{\"enable_itp_optimization\":0}}"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -88,7 +88,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "gFzmzLsOliwP4zoA4xuAJooBPIU3QStXRuQpafgP"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -101,7 +101,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "5195fbd68f2c916c3bb12460f2365d756907d775"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -114,7 +114,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "3fc4a6a96059b80415ece9c36aeea0db7b4a963aed9c864fa828b9488d7a6754153b585c553c80e3fc5706f0ece2063023630bb827fa6f5e444b808136522e6ceb888e16a3d53d21bbec3ec73be74190"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -127,7 +127,7 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "u%3D1455683353915527170"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": "x.com",
@@ -139,7 +139,7 @@
     "secure": false,
     "session": true,
     "storeId": "0",
-    "value": "zh-cn"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   },
   {
     "domain": ".x.com",
@@ -152,6 +152,6 @@
     "secure": true,
     "session": false,
     "storeId": "0",
-    "value": "IhIsst785WlYuvlSmgQXU4LkrdyPXytG5F0XFp6pMSs-1778826811.9423459-1.0.1.1-7NhGFHP5v4pRnsxQs5Rn46plX1jRfvvaf2d42ht8ARvmYzHzwrIrbsWZtRJG221Mt._YYLGIYDIgxOcmWRYz1nyjmFdFjoX3K_0_0ar9b2DQHdcEVvYw8EFfYriY6qjF"
+    "value": "REPLACE_WITH_ACTUAL_VALUE"
   }
 ]
