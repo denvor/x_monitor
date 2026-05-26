@@ -186,18 +186,16 @@ class BrowserSession:
 
     _browser: Optional["uc.Browser"] = None
 
-    # Extract newest N tweets, skipping pinned tweets.
+    # Extract newest N tweets, skipping pinned tweets and deduplicating by link.
     TWEET_EXTRACT_JS = """(() => {
         const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
         const normal = articles.filter(a =>
             !a.querySelector('[data-testid="UserPin"]') &&
             !a.querySelector('[data-testid="tweetWithIntentHeader"]')
         );
-        return normal.slice(0, {count}).map(article => {
-            const textEl = article.querySelector('div[lang]');
-            const text = textEl ? textEl.textContent : '';
+        const seen = new Set();
+        return normal.slice(0, {count}).reduce((acc, article) => {
             let link = '';
-            let pubTime = '';
             const allLinks = article.querySelectorAll('a[href]');
             for (const a of allLinks) {
                 if (a.href && a.href.includes('/status/')) {
@@ -205,12 +203,18 @@ class BrowserSession:
                     break;
                 }
             }
+            if (!link || seen.has(link)) return acc;
+            seen.add(link);
+            const textEl = article.querySelector('div[lang]');
+            const text = textEl ? textEl.textContent : '';
+            let pubTime = '';
             const timeEl = article.querySelector('time');
             if (timeEl) {
                 pubTime = timeEl.getAttribute('datetime') || timeEl.getAttribute('data-time') || '';
             }
-            return { text: text.trim(), link, pubTime };
-        });
+            acc.push({ text: text.trim(), link, pubTime });
+            return acc;
+        }, []);
     })()"""
 
     @classmethod
