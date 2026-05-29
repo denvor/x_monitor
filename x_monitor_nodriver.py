@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import re
+import socket
+import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -159,6 +161,8 @@ def _setup_logger() -> logging.Logger:
 
 log = _setup_logger().info
 
+_xvfb_pid: Optional[int] = None
+
 
 # ── Browser Session ─────────────────────────────────────────────────
 
@@ -179,6 +183,45 @@ def _load_cookies(path: str) -> list[CookieParam]:
             continue
         cookies.append(CookieParam(name=name, value=value, domain=c.get("domain", "")))
     return cookies
+
+
+def _check_port(host: str, port: int, timeout: float = 2.0) -> bool:
+    """Check if a TCP port is accepting connections."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        return s.connect_ex((host, port)) == 0
+
+
+def _launch_chrome() -> None:
+    """Prepare Xvfb virtual display for nodriver to use.
+
+    nodriver's uc.start() will auto-detect DISPLAY and use it.
+    """
+    display_num = ":99"
+    xvfb_cmd = f"Xvfb {display_num} -screen 0 1920x1080x24"
+    log(f"[CHROME] Starting Xvfb: {xvfb_cmd}")
+    xvfb = subprocess.Popen(
+        xvfb_cmd.split(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    global _xvfb_pid
+    _xvfb_pid = xvfb.pid
+
+    # Wait for Xvfb to be ready
+    for _ in range(20):
+        env = {**os.environ, "DISPLAY": display_num}
+        result = subprocess.run(
+            ["xdpyinfo", "-display", display_num],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            break
+        time.sleep(0.5)
+
+    os.environ["DISPLAY"] = display_num
+    log(f"[CHROME] DISPLAY={display_num} set for nodriver")
 
 
 class BrowserSession:
@@ -220,7 +263,16 @@ class BrowserSession:
     @classmethod
     async def _get_browser(cls) -> "uc.Browser":
         if cls._browser is None:
-            cls._browser = await uc.start(host="127.0.0.1", port=9222, headless=False)
+            if not _check_port("127.0.0.1", 9222) or "DISPLAY" not in os.environ:
+                _launch_chrome()
+            cls._browser = await uc.start(
+                sandbox=False,
+                port=9222,
+                browser_args=[
+                    "--disable-dev-shm-usage",
+                    "--proxy-server=http://127.0.0.1:20171",
+                ],
+            )
         return cls._browser
 
     @classmethod
@@ -235,7 +287,8 @@ class BrowserSession:
         try:
             gen = network.set_cookies(cookies=cookies)
             await tab.send(gen)
-            log(f"[COOKIE] Injected {len(cookies)} cookies for {tab.url}")
+            current_url = tab.url or "(no url yet)"
+            log(f"[COOKIE] Injected {len(cookies)} cookies (current url: {current_url})")
         except Exception as e:
             log(f"[COOKIE] Failed to inject cookies: {e}")
 
@@ -252,8 +305,11 @@ class BrowserSession:
 
         if target is None:
             target = await browser.get(f"https://x.com/{handle}")
-            # No existing tab means no cookies yet — inject them
+            # Wait briefly for page context, then inject cookies
+            await asyncio.sleep(1)
             await cls._inject_cookies(target)
+            # Re-navigate so cookies take effect
+            await target.get(f"https://x.com/{handle}")
         else:
             await target.get(f"https://x.com/{handle}")
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2] - 2026-05-29
+
+### Added
+- **Chrome 自动启动**：当 9222 端口不可用时，自动启动 Xvfb 虚拟显示器并通过 nodriver 启动 Chrome（含代理），无需手动预先启动 Chrome
+- **端口检测**：`_check_port()` 在启动前检测 CDP 端口是否可用
+
+### Fixed
+- **Cookie 注入时序**：注入 cookie 后重新导航页面，确保 cookie 在请求中生效（修复注入后页面未登录的问题）
+- **双重 `_launch_chrome()` 调用**：合并端口检测和 DISPLAY 检测条件，避免重复启动 Xvfb
+
+### Changed
+- **Chrome 启动参数**：`--proxy-server=http://127.0.0.1:20171` 内置于 browser_args，自动配置代理
+
 ## [4.1] - 2026-05-26
 
 ### Fixed
