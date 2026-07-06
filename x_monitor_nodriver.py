@@ -282,6 +282,7 @@ class BrowserSession:
                 browser_args=[
                     "--disable-dev-shm-usage",
                     "--proxy-server=http://127.0.0.1:20171",
+                    "--user-data-dir=/tmp/xmonitor-chrome",
                 ],
             )
         return cls._browser

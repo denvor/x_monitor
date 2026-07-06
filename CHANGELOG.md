@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Chrome 用户数据持久化**：`--user-data-dir=/tmp/xmonitor-chrome` 固定目录，跨运行复用同一 profile，避免每次创建 196MB 临时目录
+
 ## [4.3] - 2026-05-29
 
 ### Added
