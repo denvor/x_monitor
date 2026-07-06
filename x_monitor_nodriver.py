@@ -78,6 +78,17 @@ class AccountResult:
     status: FetchStatus = FetchStatus.OK  # overall result for this account
 
 
+def _parse_proxy(value: Optional[str]) -> Optional[str]:
+    """Parse proxy config value.
+
+    Returns None if proxy is disabled (false/empty),
+    otherwise returns the proxy URL string.
+    """
+    if not value or value.strip().lower() == "false":
+        return None
+    return value.strip()
+
+
 @dataclass
 class Config:
     feishu_app_id: str
@@ -87,6 +98,8 @@ class Config:
     fetch_count: int
     max_retries: int
     retry_delay: int
+    proxy: Optional[str] = None
+    user_data_dir: str = "/tmp/xmonitor-chrome"
 
     @classmethod
     def load(cls) -> "Config":
@@ -103,6 +116,8 @@ class Config:
             fetch_count=cfg.getint("monitor", "fetch_count", fallback=3),
             max_retries=cfg.getint("retry", "max_retries", fallback=2),
             retry_delay=cfg.getint("retry", "retry_delay", fallback=3),
+            proxy=_parse_proxy(cfg.get("chrome", "proxy", fallback=None)),
+            user_data_dir=cfg.get("chrome", "user_data_dir", fallback="/tmp/xmonitor-chrome"),
         )
 
 
@@ -272,18 +287,18 @@ class BrowserSession:
     })()"""
 
     @classmethod
-    async def _get_browser(cls) -> "uc.Browser":
+    async def _get_browser(cls, config: Config) -> "uc.Browser":
         if cls._browser is None:
             if not _check_port("127.0.0.1", 9222) or "DISPLAY" not in os.environ:
                 _launch_chrome()
+            browser_args = ["--disable-dev-shm-usage"]
+            if config.proxy:
+                browser_args.append(f"--proxy-server={config.proxy}")
+            browser_args.append(f"--user-data-dir={config.user_data_dir}")
             cls._browser = await uc.start(
                 sandbox=False,
                 port=9222,
-                browser_args=[
-                    "--disable-dev-shm-usage",
-                    "--proxy-server=http://127.0.0.1:20171",
-                    "--user-data-dir=/tmp/xmonitor-chrome",
-                ],
+                browser_args=browser_args,
             )
         return cls._browser
 
@@ -306,7 +321,7 @@ class BrowserSession:
 
     @classmethod
     async def fetch_tweets(cls, handle: str, config: Config) -> FetchResult:
-        browser = await cls._get_browser()
+        browser = await cls._get_browser(config)
 
         # Find existing tab or open new one
         target = None

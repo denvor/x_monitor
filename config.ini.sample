@@ -10,3 +10,8 @@ fetch_count = 3
 [retry]
 max_retries = 2
 retry_delay = 3
+
+[chrome]
+proxy = false
+# proxy = http://127.0.0.1:20171   # 取消注释并填入实际地址
+user_data_dir = /tmp/xmonitor-chrome
