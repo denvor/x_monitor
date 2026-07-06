@@ -161,10 +161,11 @@ def _setup_logger() -> logging.Logger:
     except OSError:
         log(f"[WARN] Could not create log file {_log_file}, falling back to stderr")
         fh = None
-    fh.setLevel(logging.DEBUG); fh.setFormatter(fmt_ts)
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO); ch.setFormatter(fmt_flat)
     if fh is not None:
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(fmt_ts)
         logger.addHandler(fh)
     logger.addHandler(ch)
     return logger
