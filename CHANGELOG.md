@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3] - 2026-05-29
+
+### Added
+- **推文备份**：每次抓取到的推文按 ID 持久化为独立 JSON 文件，存放在 `backup/` 目录
+- **日志轮转**：日志从项目根目录迁移到 `logs/` 目录，按 `YYYYMMDD.log` 命名
+
+### Changed
+- **BREAKING**：`x_monitor.log` 不再存放在项目根目录
+
 ## [4.2] - 2026-05-29
 
 ### Added
