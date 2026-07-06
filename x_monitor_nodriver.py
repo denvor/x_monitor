@@ -385,6 +385,8 @@ class BrowserSession:
         for i, t in enumerate(tweets):
             log(f"  [{i+1}] ID={t.id} | {t.text[:80]}")
 
+        _backup_tweets(handle, tweets)
+
         return FetchResult(tweets=tweets, status=FetchStatus.OK)
 
 
