@@ -150,13 +150,23 @@ def _setup_logger() -> logging.Logger:
     logger = logging.getLogger("x-monitor")
     logger.setLevel(logging.DEBUG)
     _dir = os.path.dirname(os.path.abspath(__file__))
+    _log_dir = os.path.join(_dir, "logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _today = datetime.now().strftime("%Y%m%d")
+    _log_file = os.path.join(_log_dir, f"{_today}.log")
     fmt_ts = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     fmt_flat = logging.Formatter("%(message)s")
-    fh = logging.FileHandler(os.path.join(_dir, "x_monitor.log"), encoding="utf-8")
+    try:
+        fh = logging.FileHandler(_log_file, encoding="utf-8")
+    except OSError:
+        log(f"[WARN] Could not create log file {_log_file}, falling back to stderr")
+        fh = None
     fh.setLevel(logging.DEBUG); fh.setFormatter(fmt_ts)
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO); ch.setFormatter(fmt_flat)
-    logger.addHandler(fh); logger.addHandler(ch)
+    if fh is not None:
+        logger.addHandler(fh)
+    logger.addHandler(ch)
     return logger
 
 log = _setup_logger().info
