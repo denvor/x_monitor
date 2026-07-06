@@ -102,9 +102,10 @@ class Config:
     user_data_dir: str = "/tmp/xmonitor-chrome"
 
     @classmethod
-    def load(cls) -> "Config":
-        _script_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(_script_dir, "config.ini")
+    def load(cls, config_path: Optional[str] = None) -> "Config":
+        if config_path is None:
+            _script_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(_script_dir, "config.ini")
         cfg = configparser.ConfigParser()
         cfg.read(config_path, encoding="utf-8")
 
