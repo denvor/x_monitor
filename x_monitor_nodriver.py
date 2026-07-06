@@ -388,6 +388,38 @@ class BrowserSession:
         return FetchResult(tweets=tweets, status=FetchStatus.OK)
 
 
+# ── Tweet Backup ──────────────────────────────────────────────────────
+
+
+def _backup_tweets(handle: str, tweets: list[Tweet]) -> None:
+    """Backup fetched tweets as individual JSON files in backup/ directory.
+
+    Each tweet is stored as backup/<tweet_id>.json with full context.
+    Existing files are not overwritten. Write failures are logged as warnings.
+    """
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    _backup_dir = os.path.join(_dir, "backup")
+    os.makedirs(_backup_dir, exist_ok=True)
+
+    for tweet in tweets:
+        _path = os.path.join(_backup_dir, f"{tweet.id}.json")
+        if os.path.exists(_path):
+            continue
+        _data = {
+            "id": tweet.id,
+            "text": tweet.text,
+            "link": tweet.link,
+            "pubTime": tweet.pub_time,
+            "handle": handle,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            with open(_path, "w", encoding="utf-8") as f:
+                json.dump(_data, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            log(f"[BACKUP] Failed to write {tweet.id}: {e}")
+
+
 # ── Feishu Notifier ─────────────────────────────────────────────────
 
 
