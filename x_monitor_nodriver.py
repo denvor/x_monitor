@@ -24,6 +24,11 @@ from typing import Optional
 import nodriver as uc
 from nodriver.cdp import network
 from nodriver.cdp.network import CookieParam
+from urllib.request import Request, urlopen
+
+# ── Module Constants ────────────────────────────────────────────────
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Data Models ─────────────────────────────────────────────────────
 
@@ -66,10 +71,6 @@ class FetchResult:
     def expired(self) -> bool:
         return self.status == FetchStatus.EXPIRED
 
-    @property
-    def failed(self) -> bool:
-        return self.status == FetchStatus.FAIL
-
 
 @dataclass
 class AccountResult:
@@ -104,8 +105,7 @@ class Config:
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "Config":
         if config_path is None:
-            _script_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(_script_dir, "config.ini")
+            config_path = os.path.join(_SCRIPT_DIR, "config.ini")
         cfg = configparser.ConfigParser()
         cfg.read(config_path, encoding="utf-8")
 
@@ -148,25 +148,12 @@ class Cache:
 # ── Exceptions ──────────────────────────────────────────────────────
 
 
-class XMonitorError(Exception):
-    """Base exception for x-monitor."""
-
-
-class TweetExtractionError(XMonitorError):
-    pass
-
-
-class FeishuSendError(XMonitorError):
-    pass
-
-
 # ── Logging ─────────────────────────────────────────────────────────
 
 def _setup_logger() -> logging.Logger:
     logger = logging.getLogger("x-monitor")
     logger.setLevel(logging.DEBUG)
-    _dir = os.path.dirname(os.path.abspath(__file__))
-    _log_dir = os.path.join(_dir, "logs")
+    _log_dir = os.path.join(_SCRIPT_DIR, "logs")
     os.makedirs(_log_dir, exist_ok=True)
     _today = datetime.now().strftime("%Y%m%d")
     _log_file = os.path.join(_log_dir, f"{_today}.log")
@@ -175,10 +162,11 @@ def _setup_logger() -> logging.Logger:
     try:
         fh = logging.FileHandler(_log_file, encoding="utf-8")
     except OSError:
-        log(f"[WARN] Could not create log file {_log_file}, falling back to stderr")
+        logger.warning("[WARN] Could not create log file %s, falling back to stderr", _log_file)
         fh = None
     ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO); ch.setFormatter(fmt_flat)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt_flat)
     if fh is not None:
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(fmt_ts)
@@ -187,8 +175,6 @@ def _setup_logger() -> logging.Logger:
     return logger
 
 log = _setup_logger().info
-
-_xvfb_pid: Optional[int] = None
 
 
 # ── Browser Session ─────────────────────────────────────────────────
@@ -214,9 +200,11 @@ def _load_cookies(path: str) -> list[CookieParam]:
 
 def _check_port(host: str, port: int, timeout: float = 2.0) -> bool:
     """Check if a TCP port is accepting connections."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(timeout)
-        return s.connect_ex((host, port)) == 0
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
 
 
 def _launch_chrome() -> None:
@@ -227,14 +215,12 @@ def _launch_chrome() -> None:
     display_num = ":99"
     xvfb_cmd = f"Xvfb {display_num} -screen 0 1920x1080x24"
     log(f"[CHROME] Starting Xvfb: {xvfb_cmd}")
-    xvfb = subprocess.Popen(
+    subprocess.Popen(
         xvfb_cmd.split(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    global _xvfb_pid
-    _xvfb_pid = xvfb.pid
 
     # Wait for Xvfb to be ready
     for _ in range(20):
@@ -306,8 +292,7 @@ class BrowserSession:
     @classmethod
     async def _inject_cookies(cls, tab: "uc.Tab") -> None:
         """Inject cookies from cookies.json into the browser via CDP."""
-        _script_dir = os.path.dirname(os.path.abspath(__file__))
-        cookie_file = os.path.join(_script_dir, "cookies.json")
+        cookie_file = os.path.join(_SCRIPT_DIR, "cookies.json")
         cookies = _load_cookies(cookie_file)
         if not cookies:
             log("[COOKIE] cookies.json not found or empty, skipping injection")
@@ -417,8 +402,7 @@ def _backup_tweets(handle: str, tweets: list[Tweet]) -> None:
     Each tweet is stored as backup/<tweet_id>.json with full context.
     Existing files are not overwritten. Write failures are logged as warnings.
     """
-    _dir = os.path.dirname(os.path.abspath(__file__))
-    _backup_dir = os.path.join(_dir, "backup")
+    _backup_dir = os.path.join(_SCRIPT_DIR, "backup")
     os.makedirs(_backup_dir, exist_ok=True)
 
     for tweet in tweets:
@@ -458,7 +442,6 @@ class FeishuNotifier:
         if "token" in self._token_cache and self._token_cache.get("exp", 0) > now:
             return self._token_cache["token"]
         try:
-            from urllib.request import Request, urlopen
             payload = json.dumps({"app_id": self.app_id, "app_secret": self.app_secret}).encode()
             req = Request(
                 "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
@@ -484,7 +467,6 @@ class FeishuNotifier:
             log("[FEISHU] No token available, skipping send")
             return False
         try:
-            from urllib.request import Request, urlopen
             payload = json.dumps({
                 "receive_id": self.chat_id,
                 "msg_type": "text",
@@ -536,8 +518,8 @@ class FeishuNotifier:
             f"X 监控脚本检测到 cookie 已过期（页面重定向到登录页）。\n"
             f"请在浏览器中刷新 X 页面重新登录。"
         )
-        print("[EXPIRED] X cookie expired")
-        print(message)
+        log("[EXPIRED] X cookie expired")
+        log(message)
         return self._send(message)
 
     @staticmethod
@@ -549,7 +531,7 @@ class FeishuNotifier:
                 f"---\n{t.text}\n---\n"
                 f"🔗 {t.link}"
             )
-            print(f"[TWEET] @{result.handle}: {t.link}")
+            log(f"[TWEET] @{result.handle}: {t.link}")
         return f"@{result.handle}\n\n" + "\n\n".join(parts)
 
 
@@ -627,7 +609,7 @@ class Monitor:
 
             if result.tweets:
                 return AccountResult(handle=handle, tweets=result.tweets)
-            log(f"   Attempt {attempt+1}: got {len(result.tweets) if result.tweets else 0} tweets")
+            log(f"   Attempt {attempt+1}: got {len(result.tweets)} tweets")
 
         log(f"   Skipping @{handle} (elapsed: {time.time()-account_start:.1f}s)")
         return AccountResult(handle=handle)
@@ -639,8 +621,7 @@ class Monitor:
 if __name__ == "__main__":
     try:
         config = Config.load()
-        _dir = os.path.dirname(os.path.abspath(__file__))
-        cache = Cache(os.path.join(_dir, "cache.json"))
+        cache = Cache(os.path.join(_SCRIPT_DIR, "cache.json"))
         cache.load()
         notifier = FeishuNotifier(config.feishu_app_id, config.feishu_app_secret, config.feishu_chat_id)
         monitor = Monitor(config, cache, notifier)
