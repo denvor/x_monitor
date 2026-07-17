@@ -644,7 +644,10 @@ if __name__ == "__main__":
         cache.load()
         notifier = FeishuNotifier(config.feishu_app_id, config.feishu_app_secret, config.feishu_chat_id)
         monitor = Monitor(config, cache, notifier)
-        asyncio.run(monitor.run())
+        asyncio.run(asyncio.wait_for(monitor.run(), timeout=120))
+    except asyncio.TimeoutError:
+        log("❌ X Monitor 超时（120s），强制退出")
+        sys.exit(1)
     except Exception as e:
         import traceback
         log(f"❌ X Monitor 崩溃: {type(e).__name__}: {e}")
