@@ -534,10 +534,6 @@ class FeishuNotifier:
             log(f"[FEISHU] Exception sending message: {e}")
             return False
 
-    def _send(self, text: str) -> bool:
-        """Send a plain text message."""
-        return self._post("text", json.dumps({"text": text}))
-
     def _send_card(self, card: dict) -> bool:
         """Send an interactive card message."""
         return self._post("interactive", json.dumps(card))
@@ -580,27 +576,33 @@ class FeishuNotifier:
                 elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
                 log(f"[TWEET] @{r.handle}: {t.link}")
 
+        # 命中 Alpha 时标题带 ALPHA 字样，便于在飞书消息通知预览中直接分辨
+        title = "🔴 ALPHA｜X 新帖提醒" if has_alpha else "🔔 X 新帖提醒"
         return {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "lark_md", "content": "🔔 X 新帖提醒"},
+                "title": {"tag": "lark_md", "content": title},
                 "template": "red" if has_alpha else "blue",
             },
             "elements": elements,
         }
 
     def send_expired(self) -> bool:
-        """Send cookie expired notification."""
+        """Send cookie expired notification as a card."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        message = (
-            f"⚠️ **X Cookie 已过期**\n\n"
-            f"时间：{now} (北京时间)\n\n"
-            f"X 监控脚本检测到 cookie 已过期（页面重定向到登录页）。\n"
-            f"请在浏览器中刷新 X 页面重新登录。"
-        )
         log("[EXPIRED] X cookie expired")
-        log(message)
-        return self._send(message)
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "lark_md", "content": "⚠️ X Cookie 已过期"},
+                "template": "orange",
+            },
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md",
+                                        "content": f"时间：{now} (北京时间)\n\nX 监控脚本检测到 cookie 已过期（页面重定向到登录页）。\n请在浏览器中刷新 X 页面重新登录。"}},
+            ],
+        }
+        return self._send_card(card)
 
 
 # ── Monitor Orchestrator ────────────────────────────────────────────

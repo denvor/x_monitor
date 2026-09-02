@@ -174,6 +174,8 @@ class TestBuildNewTweetsCard:
         results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安 Alpha 将成为首个上线 X 的平台！")])]
         card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
         assert card["header"]["template"] == "red"
+        # 标题含 ALPHA，通知预览可直接分辨
+        assert "ALPHA" in card["header"]["title"]["content"]
         # 第一条元素是总横幅
         assert ALPHA_BANNER in self._contents(card)[0]
         # 命中推文区块顶部也含横幅
@@ -183,6 +185,7 @@ class TestBuildNewTweetsCard:
         results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安发布季度报告，业绩创新高。")])]
         card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
         assert card["header"]["template"] == "blue"
+        assert "ALPHA" not in card["header"]["title"]["content"]
         assert all(ALPHA_BANNER not in c for c in self._contents(card))
 
     def test_mixed_only_matching_tweet_marked(self):

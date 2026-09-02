@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ALPHA 显著横幅**：命中分类的推文，在飞书卡片中以红色大字号加粗横幅置顶标注
 
 ### Changed
-- **推送改为飞书交互卡片**：`send_new_tweets` 从 `text` 纯文本消息改为 `interactive` 卡片，以支持 ALPHA 横幅的加粗、放大字号与着色；`send_expired` 仍为纯文本
+- **推送改为飞书交互卡片**：`send_new_tweets` 与 `send_expired` 均从 `text` 纯文本消息改为 `interactive` 卡片，以支持 ALPHA 横幅的加粗、放大字号与着色
+- **Alpha 消息标题标注**：命中 Alpha 分类时，新帖卡片 header 标题变为「🔴 ALPHA｜X 新帖提醒」，在飞书消息通知预览中可直接分辨
 - **Chrome 用户数据持久化**：`--user-data-dir=/tmp/xmonitor-chrome` 固定目录，跨运行复用同一 profile，避免每次创建 196MB 临时目录
 - **浏览器参数配置化**：`--proxy-server` 和 `--user-data-dir` 从硬编码改为由 `config.ini` 的 `[chrome]` 段指定；`proxy = false` 时禁用代理
 
