@@ -79,6 +79,46 @@ class AccountResult:
     status: FetchStatus = FetchStatus.OK  # overall result for this account
 
 
+# ── Binance Alpha Classification ──────────────────────────────────────
+# 分类「币安 Alpha」生态的可领取激励推文，用于推送时打上显著的 ALPHA 标记。
+# 飞书卡片 lark_md：`# ` 为标题级大字号且加粗，<font color='red'> 着色。
+
+ALPHA_BANNER = "# <font color='red'>🔴 ALPHA</font>"
+
+
+class AlphaCategory(Enum):
+    """币安 Alpha 激励推文类别。"""
+
+    LISTING = "新币上线"
+    ALPHA_BOX = "Alpha Box 盲盒"
+    AIRDROP_REMINDER = "空投领取提醒"
+    AIRDROP_WAVE = "空投奖励发放"
+    BOOSTER = "Booster 活动"
+    POINTS_REDEMPTION = "积分兑换"
+
+
+def classify_alpha(text: str) -> Optional[AlphaCategory]:
+    """将推文正文分类为币安 Alpha 激励类型。
+
+    命中任一类别返回对应的 AlphaCategory；不匹配返回 None。
+    按优先级匹配（Booster > 盲盒 > 积分兑换 > 空投 Wave > 空投提醒 > 新币上线）。
+    """
+    txt = text.lower()
+    if "booster" in txt:
+        return AlphaCategory.BOOSTER
+    if "alpha box" in txt or "盲盒" in txt:
+        return AlphaCategory.ALPHA_BOX
+    if "redemption" in txt or "redeem" in txt:
+        return AlphaCategory.POINTS_REDEMPTION
+    if "airdrop rewards are here" in txt or "wave of" in txt:
+        return AlphaCategory.AIRDROP_WAVE
+    if "claim the binance alpha airdrop" in txt or "领取币安 alpha 空投" in txt:
+        return AlphaCategory.AIRDROP_REMINDER
+    if "first platform to feature" in txt or "成为首个上线" in txt:
+        return AlphaCategory.LISTING
+    return None
+
+
 def _parse_proxy(value: Optional[str]) -> Optional[str]:
     """Parse proxy config value.
 
@@ -278,7 +318,7 @@ class BrowserSession:
         if cls._browser is None:
             if not _check_port("127.0.0.1", 9222) or "DISPLAY" not in os.environ:
                 _launch_chrome()
-            browser_args = ["--disable-dev-shm-usage"]
+            browser_args = ["--disable-dev-shm-usage", "--no-sandbox"]
             if config.proxy:
                 browser_args.append(f"--proxy-server={config.proxy}")
             browser_args.append(f"--user-data-dir={config.user_data_dir}")
@@ -461,7 +501,8 @@ class FeishuNotifier:
             log(f"[FEISHU] Failed to get token: {e}")
             return self._token_cache.get("token", "")
 
-    def _send(self, text: str) -> bool:
+    def _post(self, msg_type: str, content: str) -> bool:
+        """Post a message of the given type to the chat. `content` is a JSON string."""
         token = self._get_token()
         if not token:
             log("[FEISHU] No token available, skipping send")
@@ -469,8 +510,8 @@ class FeishuNotifier:
         try:
             payload = json.dumps({
                 "receive_id": self.chat_id,
-                "msg_type": "text",
-                "content": json.dumps({"text": text}),
+                "msg_type": msg_type,
+                "content": content,
             }).encode()
             req = Request(
                 f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
@@ -493,21 +534,60 @@ class FeishuNotifier:
             log(f"[FEISHU] Exception sending message: {e}")
             return False
 
+    def _send(self, text: str) -> bool:
+        """Send a plain text message."""
+        return self._post("text", json.dumps({"text": text}))
+
+    def _send_card(self, card: dict) -> bool:
+        """Send an interactive card message."""
+        return self._post("interactive", json.dumps(card))
+
     def send_new_tweets(self, results: list[AccountResult]) -> bool:
-        """Send consolidated notification for multiple accounts."""
+        """Send consolidated card notification for multiple accounts."""
         send_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        sections = []
-        for r in results:
-            sections.append(self._build_account_section(r))
-        body = "\n\n" + "=" * 40 + "\n\n".join(sections)
+        card = self._build_new_tweets_card(results, send_time)
+        return self._send_card(card)
+
+    @staticmethod
+    def _build_new_tweets_card(results: list[AccountResult], send_time: str) -> dict:
+        """Build a Feishu interactive card for new tweets.
+
+        命中 Alpha 分类的推文，在其区块顶部加一条红色大字号横幅；
+        若本批存在命中推文，整条消息顶部再加一条总横幅（header 同步变红）。
+        """
         total_tweets = sum(len(r.tweets) for r in results)
-        message = (
-            f"🔔 **X 新帖提醒**\n\n"
-            f"推送时间：{send_time} (北京时间)\n\n"
-            f"共 {len(results)} 个账号，{total_tweets} 条新推文\n\n"
-            f"{body}"
-        )
-        return self._send(message)
+        has_alpha = any(classify_alpha(t.text) for r in results for t in r.tweets)
+
+        elements = []
+        if has_alpha:
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": ALPHA_BANNER}})
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md",
+                     "content": f"推送时间：{send_time} (北京时间)\n共 {len(results)} 个账号，{total_tweets} 条新推文"},
+        })
+
+        for r in results:
+            elements.append({"tag": "hr"})
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**@{r.handle}**"}})
+            for i, t in enumerate(r.tweets, 1):
+                banner = f"{ALPHA_BANNER}\n" if classify_alpha(t.text) else ""
+                content = (
+                    f"{banner}{i}. 推文时间：{t.beijing_time} (北京时间)\n\n"
+                    f"{t.text}\n\n"
+                    f"[🔗 查看原帖]({t.link})"
+                )
+                elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
+                log(f"[TWEET] @{r.handle}: {t.link}")
+
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "lark_md", "content": "🔔 X 新帖提醒"},
+                "template": "red" if has_alpha else "blue",
+            },
+            "elements": elements,
+        }
 
     def send_expired(self) -> bool:
         """Send cookie expired notification."""
@@ -521,18 +601,6 @@ class FeishuNotifier:
         log("[EXPIRED] X cookie expired")
         log(message)
         return self._send(message)
-
-    @staticmethod
-    def _build_account_section(result: AccountResult) -> str:
-        parts = []
-        for i, t in enumerate(result.tweets, 1):
-            parts.append(
-                f"{i}. 推文时间：{t.beijing_time} (北京时间)\n"
-                f"---\n{t.text}\n---\n"
-                f"🔗 {t.link}"
-            )
-            log(f"[TWEET] @{result.handle}: {t.link}")
-        return f"@{result.handle}\n\n" + "\n\n".join(parts)
 
 
 # ── Monitor Orchestrator ────────────────────────────────────────────
