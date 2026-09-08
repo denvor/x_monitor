@@ -73,9 +73,17 @@ class FetchResult:
 
 
 @dataclass
+class Reply(Tweet):
+    """Alpha 推文下的楼内自回复（回复者 == 被回复帖作者）。"""
+    parent_id: str = ""
+    parent_link: str = ""
+
+
+@dataclass
 class AccountResult:
     handle: str
     tweets: list[Tweet] = field(default_factory=list)
+    replies: list[Reply] = field(default_factory=list)  # Alpha 帖楼内新回复
     status: FetchStatus = FetchStatus.OK  # overall result for this account
 
 
@@ -491,6 +499,8 @@ def _backup_tweets(handle: str, tweets: list[Tweet]) -> None:
             "handle": handle,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
+        if getattr(tweet, "parent_link", ""):
+            _data["parent_link"] = tweet.parent_link
         try:
             with open(_path, "w", encoding="utf-8") as f:
                 json.dump(_data, f, ensure_ascii=False, indent=2)

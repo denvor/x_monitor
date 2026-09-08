@@ -244,3 +244,36 @@ class TestFindAlphaParents:
 
     def test_missing_dir_returns_empty(self, tmp_path):
         assert find_alpha_parents(str(tmp_path / "nope"), datetime.now(timezone.utc)) == {}
+
+
+# ── Reply 数据类与备份 ───────────────────────────────────────────────
+
+from x_monitor_nodriver import Reply, _backup_tweets
+
+
+class TestReplyModel:
+    def _reply(self, tid="900"):
+        return Reply(id=tid, text="👉 领取链接", link=f"https://x.com/binancezh/status/{tid}",
+                     pub_time="2026-09-01T08:00:00.000Z",
+                     parent_id="100", parent_link="https://x.com/binancezh/status/100")
+
+    def test_reply_is_tweet_and_carries_parent(self):
+        r = self._reply()
+        assert isinstance(r, Tweet)
+        assert r.id_numeric == 900 and r.parent_id == "100"
+
+    def test_account_result_replies_default_empty(self):
+        a = AccountResult(handle="binancezh", tweets=[])
+        assert a.replies == []
+
+    def test_backup_writes_parent_link_for_replies(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("x_monitor_nodriver._SCRIPT_DIR", str(tmp_path))
+        _backup_tweets("binancezh", [self._reply()])
+        saved = json.loads((tmp_path / "backup" / "900.json").read_text(encoding="utf-8"))
+        assert saved["parent_link"] == "https://x.com/binancezh/status/100"
+
+    def test_backup_unchanged_for_plain_tweets(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("x_monitor_nodriver._SCRIPT_DIR", str(tmp_path))
+        _backup_tweets("binancezh", [Tweet(id="901", text="hi", link="l", pub_time="")])
+        saved = json.loads((tmp_path / "backup" / "901.json").read_text(encoding="utf-8"))
+        assert "parent_link" not in saved
