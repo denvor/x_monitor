@@ -156,6 +156,8 @@ def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, tuple[str, s
             pub = datetime.fromisoformat(str(data["pubTime"]).replace("Z", "+00:00"))
             if pub < cutoff:
                 continue
+            if data.get("parent_link"):
+                continue  # 楼内回复不作为父帖候选（避免楼中楼第三层监控）
             if classify_alpha(data.get("text", "")) is None:
                 continue
             parents[str(data["id"])] = (data.get("handle", ""), data.get("text", ""))
@@ -164,25 +166,35 @@ def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, tuple[str, s
     return parents
 
 
+def _is_reply_candidate(r: dict, handle: str, watermark: Optional[int]) -> bool:
+    """回复候选谓词（run() 预筛与 select_new_replies 共用，防两处漂移）。
+
+    条件：作者是 handle 本人、有自身 ID、且（首跑 watermark=None 或）ID 大于水位。
+    """
+    rid = r.get("selfId") or ""
+    if not rid:
+        return False
+    if (r.get("selfHandle") or "").lower() != handle.lower():
+        return False
+    return watermark is None or int(rid) > watermark
+
+
 def select_new_replies(rows: list[dict], handle: str,
                        parents: dict[str, tuple[str, str]],
                        watermark: Optional[int],
                        metas: dict[str, dict]) -> list[Reply]:
-    """从 with_replies 候选中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
+    """从搜索页候选中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
 
-    入选条件：回复者是 handle 本人、ID 大于水位（watermark=None 表示首跑不过滤）、
-    syndication 元数据（metas）显示父帖在活跃 Alpha 集合中。
-    范围（2026-09-08 修订）：监控账号回复任意监控账号的 Alpha 帖均推送
-    （自回复 + 跨号互回；Alpha 集合只含监控账号帖子，天然隐含「回复对象是监控账号」）。
+    入选条件见 _is_reply_candidate；另要求 syndication 元数据（metas）
+    显示父帖在活跃 Alpha 集合中。范围（2026-09-08 修订）：
+    监控账号回复任意监控账号的 Alpha 帖均推送（自回复 + 跨号互回）。
     """
     out: dict[str, Reply] = {}
     for r in rows:
-        if (r.get("selfHandle") or "").lower() != handle.lower():
+        if not _is_reply_candidate(r, handle, watermark):
             continue
-        rid = r.get("selfId") or ""
-        if not rid or rid in out:
-            continue
-        if watermark is not None and int(rid) <= watermark:
+        rid = r["selfId"]
+        if rid in out:
             continue
         meta = metas.get(rid)
         if not meta:
@@ -437,9 +449,8 @@ class BrowserSession:
         }, []);
     })()"""
 
-    # with_replies 页提取器：只取「本人回复候选」（自身链接/文本/时间）。
-    # 父帖信息 DOM 拿不到（X 对自回复不渲染 chip 也不给父帖链接，实测），
-    # 由 syndication 接口逐条补 in_reply_to 字段（见 fetch_tweet_meta）。
+    # 搜索页提取器：只取「回复候选行」（自身链接/文本/时间）。
+    # 父帖 ID 由 syndication 接口逐候选补齐（见 fetch_tweet_meta）。
     REPLY_EXTRACT_JS = """(() => {
         const parse = (href) => {
             const m = (href || '').match(/x\\.com\\/([^/]+)\\/status\\/(\\d+)/);
@@ -608,19 +619,49 @@ class BrowserSession:
 
     @classmethod
     async def _fetch_search_rows(cls, browser, url: str, tag: str) -> "tuple[list[dict], FetchStatus]":
-        """新 tab 打开单个搜索页并提取（X 搜索 SPA 同 tab 换 query 不刷新结果，实测须新 tab）。"""
-        # 不关闭旧搜索 tab（tab.close 会打断 CDP websocket，实测）；
-        # 新 tab 保证 SPA 全新加载（同 tab 换 query 不刷新结果，实测）。
-        # 不做二次导航：profile 已有登录态，二次 get 会把 Live 重置回 Top（实测丢例子）。
-        target = await browser.get(url)
+        """搜索页提取，复用单个常驻 scratch tab。
+
+        要点（均实测）：X 搜索 SPA 同 tab 仅改 URL 可能不重新拉结果 → 用 window
+        标记验证文档真实整体替换，未替换判 FAIL（下轮重试）；tab.close() 会打断
+        CDP websocket（多次实测崩溃）→ 不关 tab，常驻一个无泄漏；滚动会打断
+        Live 列表 → 不滚动；登录墙页面同样无 article → 超时后按 URL 分流。
+        """
+        target = None
+        for tab in browser.tabs:
+            if tab and tab.url and "x.com/search" in tab.url:
+                target = tab
+                break
+        if target is None:
+            target = await browser.get(url)
+            await asyncio.sleep(1.5)
+        else:
+            try:
+                await target.evaluate("window.__xm_stale=1")
+            except Exception:
+                pass
+            await target.get(url)
+            replaced = False
+            for _ in range(16):
+                await asyncio.sleep(0.5)
+                try:
+                    v = await target.evaluate("window.__xm_stale||0")
+                except Exception:
+                    continue
+                if not getattr(v, "value", v):
+                    replaced = True
+                    break
+            if not replaced:
+                log(f"[FAIL][REPLIES] {tag}: 页面未整体刷新（SPA 拦截）")
+                return [], FetchStatus.FAIL
         try:
-            await target.wait_for("article", timeout=20)
+            await target.wait_for("article", timeout=12)
         except Exception:
-            log(f"[FAIL][REPLIES] {tag}: 无 article（可能该式零结果）")
+            if "login" in (target.url or "").lower():
+                log(f"[EXPIRED][REPLIES] {tag}: 搜索页重定向登录")
+                return [], FetchStatus.EXPIRED
+            log(f"[FAIL][REPLIES] {tag}: 无 article（零结果或渲染慢）")
             return [], FetchStatus.FAIL
-        # 不做滚动：实测滚动会打断 Live 列表（例子从首条消失），
-        # 且回复量极低（每式 ≤15 条），首屏窗口足够
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(1.5)  # 等首屏渲染稳定
         try:
             result = await target.evaluate(
                 "JSON.stringify(" + cls.REPLY_EXTRACT_JS + ")",
@@ -861,6 +902,9 @@ class Monitor:
                 break
 
             if account_result.tweets:
+                # 先入卡片队列再推水位：后续回复阶段若 break（EXPIRED），
+                # 本账号新帖仍会随本轮发送，不会被水位永久吞掉（code-review 修复）
+                all_results.append(account_result)
                 self.cache.update(handle, str(max(t.id_numeric for t in account_result.tweets)))
 
             # ── Alpha 楼内回复监控 ──
@@ -884,10 +928,7 @@ class Monitor:
                     wm = int(wm_raw) if wm_raw else None
                     # 候选 = 本人回复且高于水位；逐条查 syndication 补父帖信息
                     candidates = sorted(
-                        (r for r in rows
-                         if (r.get("selfHandle") or "").lower() == handle.lower()
-                         and r.get("selfId")
-                         and (wm is None or int(r["selfId"]) > wm)),
+                        (r for r in rows if _is_reply_candidate(r, handle, wm)),
                         key=lambda r: int(r["selfId"]))[:SYNDICATION_MAX_LOOKUPS]
                     metas: dict[str, dict] = {}
                     for r in candidates:
@@ -896,15 +937,21 @@ class Monitor:
                             metas[r["selfId"]] = meta
 
                     new_replies = select_new_replies(rows, handle, alpha_parents, wm, metas)
+                    capped = False
                     if len(new_replies) > MAX_REPLIES_PER_PUSH:
                         new_replies = new_replies[-MAX_REPLIES_PER_PUSH:]
+                        capped = True
+                        log(f"[REPLIES] @{handle}: 命中超过上限 {MAX_REPLIES_PER_PUSH}，"
+                            f"保留最新，其余下轮重试")
                     if new_replies:
                         account_result.replies = new_replies
                         _backup_tweets(handle, new_replies)
                         log(f"[REPLIES] @{handle}: {len(new_replies)} 条 Alpha 楼内新回复")
+                        if account_result not in all_results:
+                            all_results.append(account_result)
 
-                    # 水位推进：只越过「从低到高连续已解析」的前缀，
-                    # 查询失败的候选留在缝隙下轮重试，避免被吞
+                    # 水位推进：只越过「从低到高连续已解析」的前缀（查询失败者留待下轮）；
+                    # 截断发生时停在已推送首条之前——宁可下轮重复推几条，不永久吞（code-review 修复）
                     advance = wm or 0
                     cand_ids = sorted(int(r["selfId"]) for r in candidates)
                     resolved = {int(t) for t in metas}
@@ -913,11 +960,10 @@ class Monitor:
                             advance = max(advance, cid)
                         else:
                             break
+                    if capped and new_replies:
+                        advance = min(advance, int(new_replies[0].id) - 1)
                     if advance > (wm or 0):
                         self.cache.update(key, str(advance))
-
-            if account_result.tweets or account_result.replies:
-                all_results.append(account_result)
 
         # Send consolidated notification
         send_ok = False

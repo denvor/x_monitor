@@ -245,6 +245,18 @@ class TestFindAlphaParents:
     def test_missing_dir_returns_empty(self, tmp_path):
         assert find_alpha_parents(str(tmp_path / "nope"), datetime.now(timezone.utc)) == {}
 
+    def test_reply_backups_never_become_parents(self, tmp_path):
+        """楼内回复的备份记录不得成为父帖（杜绝楼中楼第三层监控，code-review 修复）。"""
+        now = datetime.now(timezone.utc)
+        self._mk(tmp_path, "100", "binancezh", self.ALPHA_TEXT, now)
+        data = {"id": "101", "handle": "binancezh", "text": self.ALPHA_TEXT,
+                "link": "https://x.com/binancezh/status/101",
+                "pubTime": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "parent_link": "https://x.com/binancezh/status/100"}
+        (tmp_path / "101.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        parents = find_alpha_parents(str(tmp_path), now)
+        assert set(parents.keys()) == {"100"}
+
 
 # ── Reply 数据类与备份 ───────────────────────────────────────────────
 
@@ -302,7 +314,7 @@ class TestSelectNewReplies:
         assert out[0].parent_link == "https://x.com/binancezh/status/100"
 
     def test_foreign_author_filtered(self):
-        # with_replies 页混入他人推文（selfHandle != handle）
+        # 搜索页结果混入他人推文（selfHandle != handle）
         out = select_new_replies([self._row(selfHandle="SomeUser", selfId="201")],
                                  "binancezh", self.P, 100, self.M)
         assert out == []
@@ -476,6 +488,44 @@ class TestMonitorReplyWiring:
         cache, sent = self._run(tmp_path, monkeypatch,
                                 cache_data={"binancezh:replies": "250"}, reply_rows=[self._reply_row("200")])
         assert sent == [] and cache.get("binancezh:replies") == "250"
+
+    def test_cap_keeps_oldest_for_retry(self, tmp_path, monkeypatch):
+        """命中超上限：推最新 5 条，水位停在已推首条之前——丢弃的最旧 2 条下轮重试（修复永久吞帖）。"""
+        rows = [self._reply_row(str(201 + i)) for i in range(7)]  # 201..207，parent=100
+        cache, sent = self._run(tmp_path, monkeypatch,
+                                cache_data={"binancezh:replies": "150"}, reply_rows=rows)
+        assert len(sent) == 1
+        card = json.loads(sent[0])
+        contents = "\n".join(el.get("text", {}).get("content", "") for el in card["elements"])
+        assert "status/207" in contents and "status/201" not in contents  # 推了最新 5 条(203-207)
+        # 水位 ≤ 202（203-1）：201、202 下轮仍会被选
+        assert int(cache.get("binancezh:replies")) <= 202
+
+    def test_reply_expired_after_tweets_still_sends_tweets(self, tmp_path, monkeypatch):
+        """回复阶段 EXPIRED break 时，本账号已抓新帖必须照常入卡发送（修复水位吞帖）。"""
+        # wallet 在前：先入账新帖，再到 zh 的回复阶段触发 EXPIRED break
+        config = SimpleNamespace(handles=["binancewallet", "binancezh"], max_retries=0,
+                                 retry_delay=0, fetch_count=3, proxy=None)
+        cache = Cache(str(tmp_path / "cache.json")); cache._data = {"binancezh:replies": "10"}
+        sent = []
+        notifier = FeishuNotifier("id", "secret", "chat")
+        notifier._post = lambda msg_type, content: sent.append((msg_type, content)) or True
+
+        async def fake_tweets(cls, handle, config):
+            if handle == "binancewallet":
+                return FetchResult(tweets=[Tweet(id="500", text="新帖", link=f"https://x.com/binancewallet/status/500", pub_time="")])
+            return FetchResult(tweets=[])
+        async def fake_replies(cls, handle, config):
+            return [], FetchStatus.EXPIRED
+        monkeypatch.setattr(BrowserSession, "fetch_tweets", classmethod(fake_tweets))
+        monkeypatch.setattr(BrowserSession, "fetch_replies", classmethod(fake_replies))
+        monkeypatch.setattr("x_monitor_nodriver.find_alpha_parents",
+                            lambda d, now: {"100": ("binancezh", "Alpha 主帖")})
+        asyncio.run(Monitor(config, cache, notifier).run())
+        # wallet 的 tweet 卡片已发（interactive），且发了过期提醒
+        assert any(m == "interactive" and "status/500" in c for m, c in sent)
+        assert any(m == "interactive" and "Cookie" in json.loads(c)["header"]["title"]["content"]
+                   for m, c in sent)
 
     def test_resolved_nonmatching_candidate_advances_watermark(self, tmp_path, monkeypatch):
         # 候选已查过 meta 但不是 Alpha 父帖 → 不推送，但水位前移（避免下轮重复查询）
