@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Alpha 楼内回复监控**：扫描 7 天内 Alpha 类推文（数据源 `backup/`），抓取监控账号 `with_replies` 页面，识别账号在自家 Alpha 帖下的自回复（thread 楼内公告补链），合并进新帖卡片推送；去重使用独立缓存键 `{handle}:replies`
 - **币安 Alpha 激励分类**：`classify_alpha()` 将推文分类为新币上线 / Alpha Box 盲盒 / 空投领取提醒 / 空投奖励发放 / Booster 活动 / 积分兑换（中英双语文案覆盖）
 - **ALPHA 显著横幅**：命中分类的推文，在飞书卡片中以红色大字号加粗横幅置顶标注
 
