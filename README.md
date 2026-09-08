@@ -322,6 +322,6 @@ python3 x_monitor_nodriver.py
 
 ---
 
-*文档版本: v4.5*
+*文档版本: v4.6*
 *最后更新: 2026-09-08*
-*上次更新说明: Alpha 楼内回复监控（7 天内 Alpha 帖的自回复，with_replies 抓取，合并进 ALPHA 卡片）*
+*上次更新说明: Alpha 楼内回复监控定稿——搜索式 `from:A to:B` 逐对抓取 + syndication 补父帖 ID，自回复与跨号互回均推，例证真机端到端推送成功；币安 Alpha 激励分类与飞书卡片推送（v4.5 内容）一并归入本版*
