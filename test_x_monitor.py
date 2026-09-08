@@ -286,49 +286,95 @@ from x_monitor_nodriver import select_new_replies
 
 class TestSelectNewReplies:
     P = {"100": ("binancezh", "Alpha 主帖")}
+    # 父帖信息来自 syndication 接口（DOM 对自回复不渲染父帖，实测）
+    M = {"200": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancezh"}}
 
     def _row(self, **kw):
         base = {"selfLink": "https://x.com/binancezh/status/200", "selfHandle": "binancezh",
-                "selfId": "200", "parentLink": "https://x.com/binancezh/status/100",
-                "parentHandle": "binancezh", "parentId": "100",
-                "text": "👉 补充链接", "pubTime": "2026-09-01T08:00:00.000Z"}
+                "selfId": "200", "text": "👉 补充链接", "pubTime": "2026-09-01T08:00:00.000Z"}
         base.update(kw)
         return base
 
     def test_self_reply_to_alpha_parent_selected(self):
-        out = select_new_replies([self._row()], "binancezh", self.P, watermark=100)
+        out = select_new_replies([self._row()], "binancezh", self.P, watermark=100, metas=self.M)
         assert [r.id for r in out] == ["200"]
-        assert out[0].parent_link.endswith("/100")
+        assert out[0].parent_id == "100"
+        assert out[0].parent_link == "https://x.com/binancezh/status/100"
 
     def test_foreign_author_filtered(self):
         # with_replies 页混入他人推文（selfHandle != handle）
         out = select_new_replies([self._row(selfHandle="SomeUser", selfId="201")],
-                                 "binancezh", self.P, 100)
+                                 "binancezh", self.P, 100, self.M)
         assert out == []
 
     def test_cross_account_reply_filtered(self):
-        # A 回 B：parentHandle != handle
-        out = select_new_replies([self._row(parentHandle="binancewallet", parentId="100")],
-                                 "binancezh", self.P, 100)
+        # A 回 B：meta 的 in_reply_to_screen_name 不是本人
+        m = {"200": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancewallet"}}
+        out = select_new_replies([self._row()], "binancezh", self.P, 100, m)
         assert out == []
 
     def test_non_alpha_parent_filtered(self):
-        out = select_new_replies([self._row(parentId="999")], "binancezh", self.P, 100)
+        m = {"200": {"in_reply_to_status_id_str": "999", "in_reply_to_screen_name": "binancezh"}}
+        out = select_new_replies([self._row()], "binancezh", self.P, 100, m)
+        assert out == []
+
+    def test_missing_meta_skipped(self):
+        out = select_new_replies([self._row()], "binancezh", self.P, None, {})
         assert out == []
 
     def test_watermark_dedup_and_none_means_all(self):
-        rows = [self._row(selfId="200"), self._row(selfId="300", parentLink="p3")]
-        assert [r.id for r in select_new_replies(rows, "binancezh", self.P, 200)] == ["300"]
-        assert len(select_new_replies(rows, "binancezh", self.P, None)) == 2
+        rows = [self._row(selfId="200"), self._row(selfId="300")]
+        m = dict(self.M, **{"300": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancezh"}})
+        assert [r.id for r in select_new_replies(rows, "binancezh", self.P, 200, m)] == ["300"]
+        assert len(select_new_replies(rows, "binancezh", self.P, None, m)) == 2
 
     def test_duplicate_selfid_dropped_and_sorted(self):
         rows = [self._row(selfId="300"), self._row(selfId="300"), self._row(selfId="200")]
-        out = select_new_replies(rows, "binancezh", self.P, None)
+        m = {"200": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancezh"},
+             "300": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancezh"}}
+        out = select_new_replies(rows, "binancezh", self.P, None, m)
         assert [r.id for r in out] == ["200", "300"]
 
     def test_missing_selfid_tolerated(self):
-        out = select_new_replies([self._row(selfId="", selfLink="")], "binancezh", self.P, None)
+        out = select_new_replies([self._row(selfId="", selfLink="")], "binancezh", self.P, None, self.M)
         assert out == []
+
+
+# ── syndication 接口封装 ─────────────────────────────────────────────
+
+import re as _re
+from x_monitor_nodriver import _syndication_token, fetch_tweet_meta
+
+
+class TestSyndication:
+    def test_token_format_matches_js_rule(self):
+        """token = ((id/1e15)*Math.PI).toString(36) 去掉 0 和点。"""
+        t = _syndication_token(2095814403870564760)
+        assert t and _re.fullmatch(r"[1-9a-z]+", t)  # 小写字母数字且无 0（被剥掉）
+        # 确定性
+        assert t == _syndication_token(2095814403870564760)
+
+    def test_fetch_tweet_meta_parses_json(self, monkeypatch):
+        payload = json.dumps({"in_reply_to_status_id_str": "100",
+                              "in_reply_to_screen_name": "binancezh"}).encode()
+
+        class FakeResp:
+            def read(self_inner): return payload
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+
+        class FakeOpener:
+            def open(self_inner, req, timeout=None): return FakeResp()
+
+        monkeypatch.setattr("urllib.request.build_opener", lambda *h: FakeOpener())
+        meta = fetch_tweet_meta("200", None)
+        assert meta["in_reply_to_status_id_str"] == "100"
+
+    def test_fetch_tweet_meta_error_returns_none(self, monkeypatch):
+        def boom(*h):
+            raise OSError("net down")
+        monkeypatch.setattr("urllib.request.build_opener", boom)
+        assert fetch_tweet_meta("200", None) is None
 
 
 # ── 卡片渲染：回复区块 ───────────────────────────────────────────────
@@ -375,8 +421,9 @@ def _async(value):
 
 
 class TestMonitorReplyWiring:
-    def _run(self, tmp_path, monkeypatch, *, cache_data, reply_rows):
-        config = SimpleNamespace(handles=["binancezh"], max_retries=0, retry_delay=0, fetch_count=3)
+    def _run(self, tmp_path, monkeypatch, *, cache_data, reply_rows, meta_parent="100"):
+        config = SimpleNamespace(handles=["binancezh"], max_retries=0, retry_delay=0,
+                                 fetch_count=3, proxy=None)
         cache = Cache(str(tmp_path / "cache.json"))
         cache._data = dict(cache_data)
         sent = []
@@ -390,17 +437,18 @@ class TestMonitorReplyWiring:
         monkeypatch.setattr("x_monitor_nodriver.find_alpha_parents",
                             lambda backup_dir, now: {"100": ("binancezh", "Alpha 主帖")})
         monkeypatch.setattr("x_monitor_nodriver._backup_tweets", lambda handle, items: None)
+        monkeypatch.setattr("x_monitor_nodriver.fetch_tweet_meta",
+                            lambda tid, proxy: {"in_reply_to_status_id_str": meta_parent,
+                                                "in_reply_to_screen_name": "binancezh"})
         asyncio.run(Monitor(config, cache, notifier).run())
         return cache, sent
 
     def _reply_row(self, sid="200"):
         return {"selfLink": f"https://x.com/binancezh/status/{sid}", "selfHandle": "binancezh",
-                "selfId": sid, "parentLink": "https://x.com/binancezh/status/100",
-                "parentHandle": "binancezh", "parentId": "100",
-                "text": "👉 补充链接", "pubTime": "2026-09-01T08:00:00.000Z"}
+                "selfId": sid, "text": "👉 补充链接", "pubTime": "2026-09-01T08:00:00.000Z"}
 
     def test_first_run_pushes_matching_replies(self, tmp_path, monkeypatch):
-        # 无水位时不再"静默种子"：父帖过滤已压制历史噪音，命中即推（设计变更，见 spec §5）
+        # 无水位时不静默种子：父帖过滤已压制历史噪音，命中即推（设计变更，见 spec §5）
         cache, sent = self._run(tmp_path, monkeypatch, cache_data={}, reply_rows=[self._reply_row()])
         assert cache.get("binancezh:replies") == "200"
         assert len(sent) == 1
@@ -423,3 +471,10 @@ class TestMonitorReplyWiring:
         cache, sent = self._run(tmp_path, monkeypatch,
                                 cache_data={"binancezh:replies": "250"}, reply_rows=[self._reply_row("200")])
         assert sent == [] and cache.get("binancezh:replies") == "250"
+
+    def test_resolved_nonmatching_candidate_advances_watermark(self, tmp_path, monkeypatch):
+        # 候选已查过 meta 但不是 Alpha 父帖 → 不推送，但水位前移（避免下轮重复查询）
+        cache, sent = self._run(tmp_path, monkeypatch,
+                                cache_data={"binancezh:replies": "150"},
+                                reply_rows=[self._reply_row("200")], meta_parent="999")
+        assert sent == [] and cache.get("binancezh:replies") == "200"

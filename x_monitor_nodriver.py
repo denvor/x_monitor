@@ -11,11 +11,13 @@ import asyncio
 import configparser
 import json
 import logging
+import math
 import os
 import re
 import socket
 import subprocess
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -163,30 +165,80 @@ def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, tuple[str, s
 
 def select_new_replies(rows: list[dict], handle: str,
                        parents: dict[str, tuple[str, str]],
-                       watermark: Optional[int]) -> list[Reply]:
-    """从 with_replies 提取结果中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
+                       watermark: Optional[int],
+                       metas: dict[str, dict]) -> list[Reply]:
+    """从 with_replies 候选中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
 
-    入选条件：回复者是 handle 本人、被回复对象也是 handle（自回复）、
-    父帖 ID 在活跃 Alpha 集合中、ID 大于水位（watermark=None 表示首跑不过滤）。
+    入选条件：回复者是 handle 本人、ID 大于水位（watermark=None 表示首跑不过滤）、
+    syndication 元数据（metas）显示父帖在活跃 Alpha 集合中且父帖作者也是 handle（自回复）。
     """
     out: dict[str, Reply] = {}
     for r in rows:
         if (r.get("selfHandle") or "").lower() != handle.lower():
-            continue
-        if (r.get("parentHandle") or "").lower() != handle.lower():
-            continue
-        parent_id = r.get("parentId") or ""
-        if parent_id not in parents:
             continue
         rid = r.get("selfId") or ""
         if not rid or rid in out:
             continue
         if watermark is not None and int(rid) <= watermark:
             continue
+        meta = metas.get(rid)
+        if not meta:
+            continue
+        parent_id = meta.get("in_reply_to_status_id_str") or ""
+        if parent_id not in parents:
+            continue
+        if (meta.get("in_reply_to_screen_name") or "").lower() != handle.lower():
+            continue
         out[rid] = Reply(id=rid, text=r.get("text", ""), link=r.get("selfLink", ""),
                          pub_time=r.get("pubTime", ""),
-                         parent_id=parent_id, parent_link=r.get("parentLink", ""))
+                         parent_id=parent_id,
+                         parent_link=f"https://x.com/{handle}/status/{parent_id}")
     return sorted(out.values(), key=lambda t: t.id_numeric)
+
+
+SYNDICATION_MAX_LOOKUPS = 20  # 单轮单账号 syndication 查询上限
+
+
+def _syndication_token(tweet_id: int) -> str:
+    """syndication 接口 token 参数。
+
+    等价 JS：((id/1e15)*Math.PI).toString(36).replace(/(0+|\\.)/g,'')
+    """
+    x = (tweet_id / 1e15) * math.pi
+    ip, frac = int(x), x - int(x)
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    base = ""
+    n = ip
+    while n:
+        n, r = divmod(n, 36)
+        base = digits[r] + base
+    s = (base or "0") + "."
+    for _ in range(12):
+        frac *= 36
+        d = int(frac)
+        frac -= d
+        s += digits[d]
+    return "".join(c for c in s if c not in "0.")
+
+
+def fetch_tweet_meta(tweet_id: str, proxy: Optional[str]) -> Optional[dict]:
+    """查 X syndication 公开接口取单条推文元数据（重点 in_reply_to 字段）。
+
+    返回 dict；网络/解析失败返回 None（调用方按未解析处理，水位不越过）。
+    """
+    try:
+        url = ("https://cdn.syndication.twimg.com/tweet-result"
+               f"?id={tweet_id}&token={_syndication_token(int(tweet_id))}&lang=zh")
+        handlers = []
+        if proxy:
+            handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+        opener = urllib.request.build_opener(*handlers)
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with opener.open(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        log(f"[FAIL][REPLIES] syndication {tweet_id}: {e}")
+        return None
 
 
 def _parse_proxy(value: Optional[str]) -> Optional[str]:
@@ -383,8 +435,9 @@ class BrowserSession:
         }, []);
     })()"""
 
-    # with_replies 页提取器：X 对自回复不渲染「回复@xxx」chip（实测），
-    # 父帖关系靠 article 内非时间戳的 /status/ 链接判定；排除 blockquote 引用卡。
+    # with_replies 页提取器：只取「本人回复候选」（自身链接/文本/时间）。
+    # 父帖信息 DOM 拿不到（X 对自回复不渲染 chip 也不给父帖链接，实测），
+    # 由 syndication 接口逐条补 in_reply_to 字段（见 fetch_tweet_meta）。
     REPLY_EXTRACT_JS = """(() => {
         const parse = (href) => {
             const m = (href || '').match(/x\\.com\\/([^/]+)\\/status\\/(\\d+)/);
@@ -396,18 +449,9 @@ class BrowserSession:
             const selfA = timeEl ? timeEl.closest('a') : null;
             const selfLink = selfA ? selfA.href.split('?')[0] : '';
             const self = parse(selfLink);
-            let parentLink = '';
-            const anchors = Array.from(a.querySelectorAll('a[href*="/status/"]'))
-                .filter(x => !x.closest('blockquote'));
-            for (const x of anchors) {
-                const h = x.href.split('?')[0];
-                if (h && h !== selfLink) { parentLink = h; break; }
-            }
-            const parent = parse(parentLink);
             const textEl = a.querySelector('div[lang]');
             return {
                 selfLink, selfHandle: self.handle, selfId: self.id,
-                parentLink, parentHandle: parent.handle, parentId: parent.id,
                 text: textEl ? textEl.textContent.trim() : '',
                 pubTime: timeEl ? (timeEl.getAttribute('datetime') || '') : ''
             };
@@ -821,17 +865,41 @@ class Monitor:
                     break
                 if rows:
                     key = f"{handle}:replies"
-                    wm = self.cache.get(key)
-                    # 无水位（首跑）不做静默种子：父帖 7 天窗口本身已压制历史噪音，命中即推
-                    new_replies = select_new_replies(rows, handle, alpha_parents,
-                                                     int(wm) if wm else None)
+                    wm_raw = self.cache.get(key)
+                    wm = int(wm_raw) if wm_raw else None
+                    # 候选 = 本人回复且高于水位；逐条查 syndication 补父帖信息
+                    candidates = sorted(
+                        (r for r in rows
+                         if (r.get("selfHandle") or "").lower() == handle.lower()
+                         and r.get("selfId")
+                         and (wm is None or int(r["selfId"]) > wm)),
+                        key=lambda r: int(r["selfId"]))[:SYNDICATION_MAX_LOOKUPS]
+                    metas: dict[str, dict] = {}
+                    for r in candidates:
+                        meta = fetch_tweet_meta(r["selfId"], self.config.proxy)
+                        if meta is not None:
+                            metas[r["selfId"]] = meta
+
+                    new_replies = select_new_replies(rows, handle, alpha_parents, wm, metas)
                     if len(new_replies) > MAX_REPLIES_PER_PUSH:
                         new_replies = new_replies[-MAX_REPLIES_PER_PUSH:]
                     if new_replies:
                         account_result.replies = new_replies
                         _backup_tweets(handle, new_replies)
-                        self.cache.update(key, str(max(r.id_numeric for r in new_replies)))
                         log(f"[REPLIES] @{handle}: {len(new_replies)} 条 Alpha 楼内新回复")
+
+                    # 水位推进：只越过「从低到高连续已解析」的前缀，
+                    # 查询失败的候选留在缝隙下轮重试，避免被吞
+                    advance = wm or 0
+                    cand_ids = sorted(int(r["selfId"]) for r in candidates)
+                    resolved = {int(t) for t in metas}
+                    for cid in cand_ids:
+                        if cid in resolved:
+                            advance = max(advance, cid)
+                        else:
+                            break
+                    if advance > (wm or 0):
+                        self.cache.update(key, str(advance))
 
             if account_result.tweets or account_result.replies:
                 all_results.append(account_result)

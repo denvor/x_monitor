@@ -30,7 +30,7 @@
 
 1. **回复量极低**：@binancezh 全部约 13 条 article（覆盖 3 周）、@binancewallet 约 11 条。30 分钟一轮的抓取窗口无挤占风险。
 2. **X 不为自回复渲染「回复 @xxx」chip**——DOM `data-testid` 列表中无回复上下文元素，原计划的文本正则提取方案作废。
-3. **父帖链接是天然判据**：每条回复 article 内含多个 `/status/` 链接，时间戳 `<a><time>` 指向回复自身，其余（非 blockquote 引用卡内的）指向父帖。
+3. ~~父帖链接是天然判据~~ **实施时二次证伪（2026-09-08）**：自回复 article 内除自身链接外只有 `/analytics` 等指向自身的伪链接，**DOM 完全拿不到父帖**；跨账号回复才有父帖 chip。父帖信息改由 **syndication 公开接口** `cdn.syndication.twimg.com/tweet-result?id=…&token=…` 逐候选查询 `in_reply_to_status_id_str` / `in_reply_to_screen_name`（实测可用，走现有代理；`_syndication_token` 复刻 JS 表达式）。水位只越过「连续已解析前缀」，查询失败的候选留待下轮，防吞。
 4. **with_replies 页面混入他人 article**（X 塞入的对话上下文，如 @Xiaoyu_184CM、@MissLulu016 出现在 @binancezh 页面），必须按 handle 过滤，不能假设页面内所有推文都属于该 handle。
 
 ## 3. 架构与数据流
