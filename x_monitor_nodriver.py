@@ -117,7 +117,8 @@ def classify_alpha(text: str) -> Optional[AlphaCategory]:
     txt = text.lower()
     if "booster" in txt:
         return AlphaCategory.BOOSTER
-    if "alpha box" in txt or "盲盒" in txt:
+    # 「盲盒」须伴随 alpha 上下文，防活动文案蹭词误报（如 referral 礼品的"惊喜盲盒"）
+    if "alpha box" in txt or ("盲盒" in txt and "alpha" in txt):
         return AlphaCategory.ALPHA_BOX
     if "redemption" in txt or "redeem" in txt:
         return AlphaCategory.POINTS_REDEMPTION

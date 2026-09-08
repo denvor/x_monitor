@@ -145,6 +145,10 @@ class TestClassifyAlpha:
     def test_box_chinese(self):
         assert classify_alpha("本次活动采用升级版的“Alpha 盲盒”模式") is AlphaCategory.ALPHA_BOX
 
+    def test_box_chinese_without_alpha_not_matched(self):
+        # referral 活动文案蹭「盲盒」一词（无 Alpha 上下文）不应误报
+        assert classify_alpha("完成任务即可解锁，更多惊喜盲盒等你开") is None
+
     def test_airdrop_reminder_english(self):
         assert classify_alpha("Please get ready to claim the Binance Alpha airdrop and trade today") is AlphaCategory.AIRDROP_REMINDER
 

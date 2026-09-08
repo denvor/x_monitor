@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7] - 2026-09-08
+
+### Changed
+- **Alpha 分类「盲盒」收紧**：`classify_alpha()` 的中文关键词「盲盒」须同时出现 alpha 上下文才命中 ALPHA_BOX（英文 `Alpha Box` 不变），防止活动文案蹭词误报（如 referral 拉新活动的「惊喜盲盒」被误判为 Alpha 盲盒）
+
+### Added
+- 回归测试 `test_box_chinese_without_alpha_not_matched`（57 个单测全绿）
+
 ## [4.6] - 2026-09-08
 
 ### Added
