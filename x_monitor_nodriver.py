@@ -383,6 +383,37 @@ class BrowserSession:
         }, []);
     })()"""
 
+    # with_replies 页提取器：X 对自回复不渲染「回复@xxx」chip（实测），
+    # 父帖关系靠 article 内非时间戳的 /status/ 链接判定；排除 blockquote 引用卡。
+    REPLY_EXTRACT_JS = """(() => {
+        const parse = (href) => {
+            const m = (href || '').match(/x\\.com\\/([^/]+)\\/status\\/(\\d+)/);
+            return m ? { handle: m[1], id: m[2] } : { handle: '', id: '' };
+        };
+        const arts = Array.from(document.querySelectorAll('article[data-testid="tweet"]')).slice(0, 20);
+        return arts.map(a => {
+            const timeEl = a.querySelector('time');
+            const selfA = timeEl ? timeEl.closest('a') : null;
+            const selfLink = selfA ? selfA.href.split('?')[0] : '';
+            const self = parse(selfLink);
+            let parentLink = '';
+            const anchors = Array.from(a.querySelectorAll('a[href*="/status/"]'))
+                .filter(x => !x.closest('blockquote'));
+            for (const x of anchors) {
+                const h = x.href.split('?')[0];
+                if (h && h !== selfLink) { parentLink = h; break; }
+            }
+            const parent = parse(parentLink);
+            const textEl = a.querySelector('div[lang]');
+            return {
+                selfLink, selfHandle: self.handle, selfId: self.id,
+                parentLink, parentHandle: parent.handle, parentId: parent.id,
+                text: textEl ? textEl.textContent.trim() : '',
+                pubTime: timeEl ? (timeEl.getAttribute('datetime') || '') : ''
+            };
+        }).filter(r => r.selfId);
+    })()"""
+
     @classmethod
     async def _get_browser(cls, config: Config) -> "uc.Browser":
         if cls._browser is None:
@@ -501,6 +532,57 @@ class BrowserSession:
         _backup_tweets(handle, tweets)
 
         return FetchResult(tweets=tweets, status=FetchStatus.OK)
+
+    @classmethod
+    async def fetch_replies(cls, handle: str, config: Config) -> "tuple[list[dict], FetchStatus]":
+        """抓取账号 with_replies 页，返回原始提取行（过滤逻辑在 select_new_replies）。"""
+        browser = await cls._get_browser(config)
+        url = f"https://x.com/{handle}/with_replies"
+        target = None
+        for tab in browser.tabs:
+            if tab and tab.url and f"x.com/{handle}" in tab.url:
+                target = tab
+                break
+        if target is None:
+            target = await browser.get(url)
+            await asyncio.sleep(1)
+            await cls._inject_cookies(target)
+            await target.get(url)
+        else:
+            await target.get(url)
+
+        try:
+            await target.wait_for("article", timeout=20)
+        except Exception:
+            log(f"[FAIL][REPLIES] @{handle}: 未等到 article (url={target.url})")
+            return [], FetchStatus.FAIL
+
+        # 触发懒加载，保证顶部窗口有足够条数
+        for _ in range(2):
+            await target.evaluate("window.scrollBy(0, 2000)")
+            await asyncio.sleep(1.2)
+
+        try:
+            result = await target.evaluate(
+                "JSON.stringify(" + cls.REPLY_EXTRACT_JS + ")",
+                await_promise=True, return_by_value=True)
+        except Exception as e:
+            log(f"[FAIL][REPLIES] @{handle}: evaluate 失败: {e}")
+            return [], FetchStatus.FAIL
+        if isinstance(result, tuple):
+            result = result[0]
+        if hasattr(result, "value"):
+            result = result.value
+        try:
+            rows = json.loads(result) if isinstance(result, str) else result
+        except Exception as e:
+            log(f"[FAIL][REPLIES] @{handle}: JSON 解析失败: {e}")
+            return [], FetchStatus.FAIL
+
+        if not rows and "login" in (target.url or "").lower():
+            return [], FetchStatus.EXPIRED
+        log(f"[REPLIES] @{handle}: with_replies 提取 {len(rows)} 条 article")
+        return rows, FetchStatus.OK
 
 
 # ── Tweet Backup ──────────────────────────────────────────────────────
