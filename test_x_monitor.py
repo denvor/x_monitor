@@ -277,3 +277,55 @@ class TestReplyModel:
         _backup_tweets("binancezh", [Tweet(id="901", text="hi", link="l", pub_time="")])
         saved = json.loads((tmp_path / "backup" / "901.json").read_text(encoding="utf-8"))
         assert "parent_link" not in saved
+
+
+# ── select_new_replies ───────────────────────────────────────────────
+
+from x_monitor_nodriver import select_new_replies
+
+
+class TestSelectNewReplies:
+    P = {"100": ("binancezh", "Alpha 主帖")}
+
+    def _row(self, **kw):
+        base = {"selfLink": "https://x.com/binancezh/status/200", "selfHandle": "binancezh",
+                "selfId": "200", "parentLink": "https://x.com/binancezh/status/100",
+                "parentHandle": "binancezh", "parentId": "100",
+                "text": "👉 补充链接", "pubTime": "2026-09-01T08:00:00.000Z"}
+        base.update(kw)
+        return base
+
+    def test_self_reply_to_alpha_parent_selected(self):
+        out = select_new_replies([self._row()], "binancezh", self.P, watermark=100)
+        assert [r.id for r in out] == ["200"]
+        assert out[0].parent_link.endswith("/100")
+
+    def test_foreign_author_filtered(self):
+        # with_replies 页混入他人推文（selfHandle != handle）
+        out = select_new_replies([self._row(selfHandle="SomeUser", selfId="201")],
+                                 "binancezh", self.P, 100)
+        assert out == []
+
+    def test_cross_account_reply_filtered(self):
+        # A 回 B：parentHandle != handle
+        out = select_new_replies([self._row(parentHandle="binancewallet", parentId="100")],
+                                 "binancezh", self.P, 100)
+        assert out == []
+
+    def test_non_alpha_parent_filtered(self):
+        out = select_new_replies([self._row(parentId="999")], "binancezh", self.P, 100)
+        assert out == []
+
+    def test_watermark_dedup_and_none_means_all(self):
+        rows = [self._row(selfId="200"), self._row(selfId="300", parentLink="p3")]
+        assert [r.id for r in select_new_replies(rows, "binancezh", self.P, 200)] == ["300"]
+        assert len(select_new_replies(rows, "binancezh", self.P, None)) == 2
+
+    def test_duplicate_selfid_dropped_and_sorted(self):
+        rows = [self._row(selfId="300"), self._row(selfId="300"), self._row(selfId="200")]
+        out = select_new_replies(rows, "binancezh", self.P, None)
+        assert [r.id for r in out] == ["200", "300"]
+
+    def test_missing_selfid_tolerated(self):
+        out = select_new_replies([self._row(selfId="", selfLink="")], "binancezh", self.P, None)
+        assert out == []

@@ -161,6 +161,34 @@ def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, tuple[str, s
     return parents
 
 
+def select_new_replies(rows: list[dict], handle: str,
+                       parents: dict[str, tuple[str, str]],
+                       watermark: Optional[int]) -> list[Reply]:
+    """从 with_replies 提取结果中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
+
+    入选条件：回复者是 handle 本人、被回复对象也是 handle（自回复）、
+    父帖 ID 在活跃 Alpha 集合中、ID 大于水位（watermark=None 表示首跑不过滤）。
+    """
+    out: dict[str, Reply] = {}
+    for r in rows:
+        if (r.get("selfHandle") or "").lower() != handle.lower():
+            continue
+        if (r.get("parentHandle") or "").lower() != handle.lower():
+            continue
+        parent_id = r.get("parentId") or ""
+        if parent_id not in parents:
+            continue
+        rid = r.get("selfId") or ""
+        if not rid or rid in out:
+            continue
+        if watermark is not None and int(rid) <= watermark:
+            continue
+        out[rid] = Reply(id=rid, text=r.get("text", ""), link=r.get("selfLink", ""),
+                         pub_time=r.get("pubTime", ""),
+                         parent_id=parent_id, parent_link=r.get("parentLink", ""))
+    return sorted(out.values(), key=lambda t: t.id_numeric)
+
+
 def _parse_proxy(value: Optional[str]) -> Optional[str]:
     """Parse proxy config value.
 
