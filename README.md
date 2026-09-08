@@ -18,7 +18,7 @@
 - **Cookie 注入**：通过 CDP 注入 cookie 绕过 nodriver 检测，确保 X 正常认证
 - **智能推送**：首次运行推送最近 3 条历史推文，后续只推送新增推文（最多 3 条）
 - **Alpha 识别**：自动分类币安 Alpha 激励推文（新币上线 / 盲盒 / 空投 / Booster / 积分兑换），推送卡片以红色大字号横幅与标题显著标注
-- **楼内追踪**：自动监控 7 天内 Alpha 推文下账号自己的追加回复（公告链接常藏在楼内），命中即以 ALPHA 卡片提醒
+- **楼内追踪**：自动监控 7 天内 Alpha 推文下监控账号的楼内回复（含自回复与跨号互回；公告链接常藏在楼内），命中即以 ALPHA 卡片提醒
 
 ### 1.3 监控账号
 
@@ -127,7 +127,7 @@
  ├─▶ Alpha 分类（classify_alpha）
  │   └─ 命中 → 卡片标题带 ALPHA + 红色横幅标注
  │
- ├─▶ Alpha 楼内回复监控（backup 中 7 天内 Alpha 帖 → with_replies 抓取）
+ ├─▶ Alpha 楼内回复监控（backup 中 7 天内 Alpha 帖 → 搜索式 from:A to:B 逐对抓取）
  │   └─ 自回复且父帖命中 → 并入新帖卡片（🧵 Alpha 帖新回复 + 原帖链接）
  │
  ├─▶ 飞书 API 发送交互卡片通知
@@ -286,7 +286,7 @@ python3 x_monitor_nodriver.py
 - ✅ 飞书消息推送（REST API + token 缓存，全部为交互卡片）
 - ✅ 币安 Alpha 激励分类（新币上线 / Alpha Box 盲盒 / 空投领取提醒 / 空投奖励发放 / Booster 活动 / 积分兑换，中英双语）
 - ✅ ALPHA 显著标注（卡片标题 + 红色大字号横幅，通知预览可直接分辨）
-- ✅ Alpha 楼内回复监控（with_replies 抓取、父帖链接判定、独立水位 `{handle}:replies` 去重）
+- ✅ Alpha 楼内回复监控（搜索式 from:A to:B 逐对抓取、syndication 补父帖 ID、独立水位 `{handle}:replies` 去重）
 - ✅ 推文时间显示（从 `<time datetime="...">` 读取，北京时间）
 - ✅ 首次运行推送历史推文（最近 3 条）
 - ✅ 代理自动配置（`--proxy-server=http://127.0.0.1:20171`）

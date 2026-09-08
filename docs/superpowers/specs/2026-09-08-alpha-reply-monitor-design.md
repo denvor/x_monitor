@@ -33,6 +33,11 @@
 3. ~~父帖链接是天然判据~~ **实施时二次证伪（2026-09-08）**：自回复 article 内除自身链接外只有 `/analytics` 等指向自身的伪链接，**DOM 完全拿不到父帖**；跨账号回复才有父帖 chip。父帖信息改由 **syndication 公开接口** `cdn.syndication.twimg.com/tweet-result?id=…&token=…` 逐候选查询 `in_reply_to_status_id_str` / `in_reply_to_screen_name`（实测可用，走现有代理；`_syndication_token` 复刻 JS 表达式）。水位只越过「连续已解析前缀」，查询失败的候选留待下轮，防吞。
 4. **with_replies 页面混入他人 article**（X 塞入的对话上下文，如 @Xiaoyu_184CM、@MissLulu016 出现在 @binancezh 页面），必须按 handle 过滤，不能假设页面内所有推文都属于该 handle。
 
+## 2b. 三次/四次修订（实施后真机验证，2026-09-08）
+
+- **三次修订（syndication）**：自回复 DOM 内连父帖链接也没有（见 §2.3 原结论被证伪，`/status/` 伪链接指向自身），改 syndication 接口补父帖 ID。
+- **四次修订（数据源→搜索式 + 范围放宽）**：`with_replies` tab 与父帖对话页对**跨号官方回复均漏抓**（用户例证 `2096871440704561524` 两处都不在）；`filter:replies` 漏 mention 式；带括号 OR 的查询不命中。最终数据源 = **搜索式 `from:{作者} to:{对象}` 按（监控账号×监控账号）逐对查询**（Live tab、新 tab、不滚动——滚动会打断 Live 列表，实测），syndication 补父帖 ID 与集合匹配。范围同步放宽：**自回复 + 跨号互回均推**。例证回复已真机端到端推送成功。
+
 ## 3. 架构与数据流
 
 ```

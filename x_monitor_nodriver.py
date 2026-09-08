@@ -76,9 +76,10 @@ class FetchResult:
 
 @dataclass
 class Reply(Tweet):
-    """Alpha 推文下的楼内自回复（回复者 == 被回复帖作者）。"""
+    """监控账号在监控账号 Alpha 帖下的楼内回复（含自回复与跨号互回）。"""
     parent_id: str = ""
     parent_link: str = ""
+    parent_handle: str = ""
 
 
 @dataclass
@@ -170,7 +171,9 @@ def select_new_replies(rows: list[dict], handle: str,
     """从 with_replies 候选中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
 
     入选条件：回复者是 handle 本人、ID 大于水位（watermark=None 表示首跑不过滤）、
-    syndication 元数据（metas）显示父帖在活跃 Alpha 集合中且父帖作者也是 handle（自回复）。
+    syndication 元数据（metas）显示父帖在活跃 Alpha 集合中。
+    范围（2026-09-08 修订）：监控账号回复任意监控账号的 Alpha 帖均推送
+    （自回复 + 跨号互回；Alpha 集合只含监控账号帖子，天然隐含「回复对象是监控账号」）。
     """
     out: dict[str, Reply] = {}
     for r in rows:
@@ -187,12 +190,11 @@ def select_new_replies(rows: list[dict], handle: str,
         parent_id = meta.get("in_reply_to_status_id_str") or ""
         if parent_id not in parents:
             continue
-        if (meta.get("in_reply_to_screen_name") or "").lower() != handle.lower():
-            continue
+        parent_handle = parents[parent_id][0] or handle
         out[rid] = Reply(id=rid, text=r.get("text", ""), link=r.get("selfLink", ""),
                          pub_time=r.get("pubTime", ""),
-                         parent_id=parent_id,
-                         parent_link=f"https://x.com/{handle}/status/{parent_id}")
+                         parent_id=parent_id, parent_handle=parent_handle,
+                         parent_link=f"https://x.com/{parent_handle}/status/{parent_id}")
     return sorted(out.values(), key=lambda t: t.id_numeric)
 
 
@@ -579,39 +581,52 @@ class BrowserSession:
 
     @classmethod
     async def fetch_replies(cls, handle: str, config: Config) -> "tuple[list[dict], FetchStatus]":
-        """抓取账号 with_replies 页，返回原始提取行（过滤逻辑在 select_new_replies）。"""
-        browser = await cls._get_browser(config)
-        url = f"https://x.com/{handle}/with_replies"
-        target = None
-        for tab in browser.tabs:
-            if tab and tab.url and f"x.com/{handle}" in tab.url:
-                target = tab
-                break
-        if target is None:
-            target = await browser.get(url)
-            await asyncio.sleep(1)
-            await cls._inject_cookies(target)
-            await target.get(url)
-        else:
-            await target.get(url)
+        """抓取账号回复候选：按（作者=handle × 对象=监控账号）逐对查询 from:{h} to:{t}。
 
+        数据源实测（2026-09-08）：with_replies tab / 父帖对话页 / filter:replies /
+        带括号 OR 的查询均有漏抓；简单式 from:A to:B 可靠（例子实测居首条）。
+        2 账号每轮 4 个搜索页。父帖 ID 由 syndication 逐候选补齐。
+        """
+        browser = await cls._get_browser(config)
+        all_rows: list[dict] = []
+        seen_ids: set[str] = set()
+        any_ok = False
+        for t in config.handles:
+            url = f"https://x.com/search?q=from%3A{handle}%20to%3A{t}&f=live"
+            rows, status = await cls._fetch_search_rows(browser, url, f"@{handle}->{t}")
+            if status == FetchStatus.EXPIRED:
+                return all_rows, FetchStatus.EXPIRED
+            if status == FetchStatus.OK:
+                any_ok = True
+            for r in rows:
+                sid = r.get("selfId")
+                if sid and sid not in seen_ids:
+                    seen_ids.add(sid)
+                    all_rows.append(r)
+        log(f"[REPLIES] @{handle}: 候选合并 {len(all_rows)} 条（{len(config.handles)} 个查询式）")
+        return all_rows, (FetchStatus.OK if any_ok else FetchStatus.FAIL)
+
+    @classmethod
+    async def _fetch_search_rows(cls, browser, url: str, tag: str) -> "tuple[list[dict], FetchStatus]":
+        """新 tab 打开单个搜索页并提取（X 搜索 SPA 同 tab 换 query 不刷新结果，实测须新 tab）。"""
+        # 不关闭旧搜索 tab（tab.close 会打断 CDP websocket，实测）；
+        # 新 tab 保证 SPA 全新加载（同 tab 换 query 不刷新结果，实测）。
+        # 不做二次导航：profile 已有登录态，二次 get 会把 Live 重置回 Top（实测丢例子）。
+        target = await browser.get(url)
         try:
             await target.wait_for("article", timeout=20)
         except Exception:
-            log(f"[FAIL][REPLIES] @{handle}: 未等到 article (url={target.url})")
+            log(f"[FAIL][REPLIES] {tag}: 无 article（可能该式零结果）")
             return [], FetchStatus.FAIL
-
-        # 触发懒加载，保证顶部窗口有足够条数
-        for _ in range(2):
-            await target.evaluate("window.scrollBy(0, 2000)")
-            await asyncio.sleep(1.2)
-
+        # 不做滚动：实测滚动会打断 Live 列表（例子从首条消失），
+        # 且回复量极低（每式 ≤15 条），首屏窗口足够
+        await asyncio.sleep(1.5)
         try:
             result = await target.evaluate(
                 "JSON.stringify(" + cls.REPLY_EXTRACT_JS + ")",
                 await_promise=True, return_by_value=True)
         except Exception as e:
-            log(f"[FAIL][REPLIES] @{handle}: evaluate 失败: {e}")
+            log(f"[FAIL][REPLIES] {tag}: evaluate 失败: {e}")
             return [], FetchStatus.FAIL
         if isinstance(result, tuple):
             result = result[0]
@@ -620,12 +635,11 @@ class BrowserSession:
         try:
             rows = json.loads(result) if isinstance(result, str) else result
         except Exception as e:
-            log(f"[FAIL][REPLIES] @{handle}: JSON 解析失败: {e}")
+            log(f"[FAIL][REPLIES] {tag}: JSON 解析失败: {e}")
             return [], FetchStatus.FAIL
-
         if not rows and "login" in (target.url or "").lower():
             return [], FetchStatus.EXPIRED
-        log(f"[REPLIES] @{handle}: with_replies 提取 {len(rows)} 条 article")
+        log(f"[REPLIES] {tag}: 搜索页候选 {len(rows)} 条")
         return rows, FetchStatus.OK
 
 
@@ -781,7 +795,8 @@ class FeishuNotifier:
             for rp in r.replies:
                 content = (
                     f"{ALPHA_BANNER}\n"
-                    f"🧵 **Alpha 帖新回复**（回复时间：{rp.beijing_time} 北京时间）\n\n"
+                    f"🧵 **Alpha 帖新回复**（@{r.handle} 回复 @{rp.parent_handle}，"
+                    f"回复时间：{rp.beijing_time} 北京时间）\n\n"
                     f"{rp.text}\n\n"
                     f"[↩️ 查看被回复原帖]({rp.parent_link}) ｜ [🔗 查看此回复]({rp.link})"
                 )

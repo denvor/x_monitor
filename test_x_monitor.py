@@ -307,11 +307,16 @@ class TestSelectNewReplies:
                                  "binancezh", self.P, 100, self.M)
         assert out == []
 
-    def test_cross_account_reply_filtered(self):
-        # A 回 B：meta 的 in_reply_to_screen_name 不是本人
-        m = {"200": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancewallet"}}
-        out = select_new_replies([self._row()], "binancezh", self.P, 100, m)
-        assert out == []
+    def test_cross_account_reply_selected(self):
+        # 范围修订（2026-09-08）：A 回 B 的 Alpha 帖也要推；
+        # 父帖链接必须指向父帖作者（P 里 100 的作者是 binancezh）
+        row = self._row(selfHandle="binancewallet",
+                        selfLink="https://x.com/binancewallet/status/200")
+        m = {"200": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancezh"}}
+        out = select_new_replies([row], "binancewallet", self.P, None, m)
+        assert [r.id for r in out] == ["200"]
+        assert out[0].parent_handle == "binancezh"
+        assert out[0].parent_link == "https://x.com/binancezh/status/100"
 
     def test_non_alpha_parent_filtered(self):
         m = {"200": {"in_reply_to_status_id_str": "999", "in_reply_to_screen_name": "binancezh"}}
