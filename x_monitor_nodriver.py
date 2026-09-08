@@ -136,12 +136,13 @@ ALPHA_REPLY_WINDOW_DAYS = 7   # 只监控 7 天内 Alpha 推文下的回复
 MAX_REPLIES_PER_PUSH = 5      # 单账号单轮回复推送上限（防刷屏）
 
 
-def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, tuple[str, str]]:
-    """扫描备份目录，返回 7 天内 Alpha 类推文集合。
+def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, str]:
+    """扫描备份目录，返回 7 天内 Alpha 类推文集合 {推文ID: 作者handle}。
 
-    返回 {推文ID: (handle, 正文)}；损坏文件 / 缺字段文件静默跳过。
+    楼内回复的备份记录（带 parent_link，即 _backup_tweets 写入回复时所加的
+    协议字段）不作为父帖，杜绝楼中楼第三层监控。损坏文件静默跳过。
     """
-    parents: dict[str, tuple[str, str]] = {}
+    parents: dict[str, str] = {}
     try:
         names = os.listdir(backup_dir)
     except OSError:
@@ -160,7 +161,7 @@ def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, tuple[str, s
                 continue  # 楼内回复不作为父帖候选（避免楼中楼第三层监控）
             if classify_alpha(data.get("text", "")) is None:
                 continue
-            parents[str(data["id"])] = (data.get("handle", ""), data.get("text", ""))
+            parents[str(data["id"])] = data.get("handle", "")
         except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
             continue
     return parents
@@ -180,12 +181,13 @@ def _is_reply_candidate(r: dict, handle: str, watermark: Optional[int]) -> bool:
 
 
 def select_new_replies(rows: list[dict], handle: str,
-                       parents: dict[str, tuple[str, str]],
+                       parents: dict[str, str],
                        watermark: Optional[int],
                        metas: dict[str, dict]) -> list[Reply]:
     """从搜索页候选中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
 
-    入选条件见 _is_reply_candidate；另要求 syndication 元数据（metas）
+    入选条件见 _is_reply_candidate（run() 已预筛，此处为防御性复核，
+    from:{handle} 查询下作者比对天然成立）；另要求 syndication 元数据（metas）
     显示父帖在活跃 Alpha 集合中。范围（2026-09-08 修订）：
     监控账号回复任意监控账号的 Alpha 帖均推送（自回复 + 跨号互回）。
     """
@@ -202,12 +204,26 @@ def select_new_replies(rows: list[dict], handle: str,
         parent_id = meta.get("in_reply_to_status_id_str") or ""
         if parent_id not in parents:
             continue
-        parent_handle = parents[parent_id][0] or handle
+        parent_handle = parents[parent_id] or handle
         out[rid] = Reply(id=rid, text=r.get("text", ""), link=r.get("selfLink", ""),
                          pub_time=r.get("pubTime", ""),
                          parent_id=parent_id, parent_handle=parent_handle,
                          parent_link=f"https://x.com/{parent_handle}/status/{parent_id}")
     return sorted(out.values(), key=lambda t: t.id_numeric)
+
+
+def _resolved_watermark(cand_ids: list[int], resolved: set[int], watermark: int) -> int:
+    """水位前缀推进：只越过「从低到高连续已解析」的前缀（cand_ids 须升序）。
+
+    未解析（syndication 失败）的候选留在缝隙内下轮重试，避免被永久吞掉。
+    """
+    advance = watermark
+    for cid in cand_ids:
+        if cid in resolved:
+            advance = cid  # 候选均已 > watermark 且严格升序（run() 预筛保证）
+        else:
+            break
+    return advance
 
 
 SYNDICATION_MAX_LOOKUPS = 20  # 单轮单账号 syndication 查询上限
@@ -248,7 +264,7 @@ def fetch_tweet_meta(tweet_id: str, proxy: Optional[str]) -> Optional[dict]:
             handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
         opener = urllib.request.build_opener(*handlers)
         req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with opener.open(req, timeout=10) as resp:
+        with opener.open(req, timeout=3) as resp:
             return json.loads(resp.read().decode())
     except Exception as e:
         log(f"[FAIL][REPLIES] syndication {tweet_id}: {e}")
@@ -413,6 +429,26 @@ def _launch_chrome() -> None:
     log(f"[CHROME] DISPLAY={display_num} set for nodriver")
 
 
+def _unwrap(res):
+    """nodriver evaluate 返回值解包（tuple[0] / .value 双形态，全文件唯一一份）。"""
+    if isinstance(res, tuple):
+        res = res[0]
+    if hasattr(res, "value"):
+        res = res.value
+    return res
+
+
+def _is_login_url(url) -> bool:
+    """登录墙判定统一口径（发帖抓取与回复抓取共用）。"""
+    return "login" in (url or "").lower()
+
+
+async def _evaluate_json(tab, js: str):
+    """evaluate JSON 字符串化表达式并解包反序列化；异常上抛由调用方定 FAIL 语义。"""
+    return json.loads(_unwrap(await tab.evaluate("JSON.stringify(" + js + ")",
+                                                 await_promise=True, return_by_value=True)))
+
+
 class BrowserSession:
     """Manage nodriver browser connection and tweet extraction."""
 
@@ -538,30 +574,14 @@ class BrowserSession:
         # Extract tweets via JS
         js = cls.TWEET_EXTRACT_JS.replace("{count}", str(config.fetch_count))
         try:
-            result = await target.evaluate(
-                "JSON.stringify(" + js + ")",
-                await_promise=True,
-                return_by_value=True,
-            )
+            tweets_raw = await _evaluate_json(target, js)
         except Exception as e:
-            log(f"[FAIL] evaluate failed for @{handle}: {e}")
-            return FetchResult(status=FetchStatus.FAIL)
-
-        if isinstance(result, tuple):
-            result = result[0]
-        if hasattr(result, "value"):
-            result = result.value
-
-        try:
-            tweets_raw = json.loads(result) if isinstance(result, str) else result
-        except Exception as e:
-            log(f"[FAIL] JSON parse failed for @{handle}: {e}")
+            log(f"[FAIL] evaluate/JSON parse failed for @{handle}: {e}")
             return FetchResult(status=FetchStatus.FAIL)
 
         if not tweets_raw:
-            current_url = target.url.lower() if target and target.url else ""
-            if "login" in current_url:
-                log(f"[EXPIRED] @{handle} redirected to login: {current_url}")
+            if _is_login_url(target.url):
+                log(f"[EXPIRED] @{handle} redirected to login: {target.url}")
                 return FetchResult(status=FetchStatus.EXPIRED)
             log(f"[FAIL] No tweets extracted for @{handle} (page may be empty)")
             return FetchResult(status=FetchStatus.FAIL)
@@ -600,7 +620,6 @@ class BrowserSession:
         """
         browser = await cls._get_browser(config)
         all_rows: list[dict] = []
-        seen_ids: set[str] = set()
         any_ok = False
         for t in config.handles:
             url = f"https://x.com/search?q=from%3A{handle}%20to%3A{t}&f=live"
@@ -609,11 +628,9 @@ class BrowserSession:
                 return all_rows, FetchStatus.EXPIRED
             if status == FetchStatus.OK:
                 any_ok = True
-            for r in rows:
-                sid = r.get("selfId")
-                if sid and sid not in seen_ids:
-                    seen_ids.add(sid)
-                    all_rows.append(r)
+            # 一条回复只有一个父帖作者，不同 to:{t} 式互斥，无需跨式去重；
+            # selfId 非空由 REPLY_EXTRACT_JS 末尾 filter 保证
+            all_rows.extend(rows)
         log(f"[REPLIES] @{handle}: 候选合并 {len(all_rows)} 条（{len(config.handles)} 个查询式）")
         return all_rows, (FetchStatus.OK if any_ok else FetchStatus.FAIL)
 
@@ -644,10 +661,10 @@ class BrowserSession:
             for _ in range(16):
                 await asyncio.sleep(0.5)
                 try:
-                    v = await target.evaluate("window.__xm_stale||0")
+                    v = _unwrap(await target.evaluate("window.__xm_stale||0"))
                 except Exception:
                     continue
-                if not getattr(v, "value", v):
+                if not v:
                     replaced = True
                     break
             if not replaced:
@@ -656,29 +673,18 @@ class BrowserSession:
         try:
             await target.wait_for("article", timeout=12)
         except Exception:
-            if "login" in (target.url or "").lower():
+            if _is_login_url(target.url):
                 log(f"[EXPIRED][REPLIES] {tag}: 搜索页重定向登录")
                 return [], FetchStatus.EXPIRED
             log(f"[FAIL][REPLIES] {tag}: 无 article（零结果或渲染慢）")
             return [], FetchStatus.FAIL
-        await asyncio.sleep(1.5)  # 等首屏渲染稳定
+        await asyncio.sleep(0.5)  # article 已出现，短暂等待渲染稳定
         try:
-            result = await target.evaluate(
-                "JSON.stringify(" + cls.REPLY_EXTRACT_JS + ")",
-                await_promise=True, return_by_value=True)
+            rows = await _evaluate_json(target, cls.REPLY_EXTRACT_JS)
         except Exception as e:
-            log(f"[FAIL][REPLIES] {tag}: evaluate 失败: {e}")
+            log(f"[FAIL][REPLIES] {tag}: evaluate/JSON 解析失败: {e}")
             return [], FetchStatus.FAIL
-        if isinstance(result, tuple):
-            result = result[0]
-        if hasattr(result, "value"):
-            result = result.value
-        try:
-            rows = json.loads(result) if isinstance(result, str) else result
-        except Exception as e:
-            log(f"[FAIL][REPLIES] {tag}: JSON 解析失败: {e}")
-            return [], FetchStatus.FAIL
-        if not rows and "login" in (target.url or "").lower():
+        if not rows and _is_login_url(target.url):
             return [], FetchStatus.EXPIRED
         log(f"[REPLIES] {tag}: 搜索页候选 {len(rows)} 条")
         return rows, FetchStatus.OK
@@ -931,35 +937,35 @@ class Monitor:
                         (r for r in rows if _is_reply_candidate(r, handle, wm)),
                         key=lambda r: int(r["selfId"]))[:SYNDICATION_MAX_LOOKUPS]
                     metas: dict[str, dict] = {}
+                    fails = 0
                     for r in candidates:
                         meta = fetch_tweet_meta(r["selfId"], self.config.proxy)
-                        if meta is not None:
+                        if meta is None:
+                            fails += 1
+                            if fails >= 3:  # 连续失败判接口不可用，剩余候选留缝隙下轮
+                                log(f"[REPLIES] @{handle}: syndication 连续失败，本轮跳过剩余候选")
+                                break
+                        else:
                             metas[r["selfId"]] = meta
 
-                    new_replies = select_new_replies(rows, handle, alpha_parents, wm, metas)
-                    capped = False
-                    if len(new_replies) > MAX_REPLIES_PER_PUSH:
+                    new_replies = select_new_replies(candidates, handle, alpha_parents, wm, metas)
+                    capped = len(new_replies) > MAX_REPLIES_PER_PUSH
+                    if capped:
                         new_replies = new_replies[-MAX_REPLIES_PER_PUSH:]
-                        capped = True
                         log(f"[REPLIES] @{handle}: 命中超过上限 {MAX_REPLIES_PER_PUSH}，"
                             f"保留最新，其余下轮重试")
                     if new_replies:
                         account_result.replies = new_replies
                         _backup_tweets(handle, new_replies)
                         log(f"[REPLIES] @{handle}: {len(new_replies)} 条 Alpha 楼内新回复")
-                        if account_result not in all_results:
+                        if not account_result.tweets:  # 有帖时已提前入队（run 主循环）
                             all_results.append(account_result)
 
-                    # 水位推进：只越过「从低到高连续已解析」的前缀（查询失败者留待下轮）；
-                    # 截断发生时停在已推送首条之前——宁可下轮重复推几条，不永久吞（code-review 修复）
-                    advance = wm or 0
-                    cand_ids = sorted(int(r["selfId"]) for r in candidates)
-                    resolved = {int(t) for t in metas}
-                    for cid in cand_ids:
-                        if cid in resolved:
-                            advance = max(advance, cid)
-                        else:
-                            break
+                    # 水位推进：只越过连续已解析前缀；截断时停在已推首条之前，
+                    # 宁复推不吞帖（code-review 修复）
+                    advance = _resolved_watermark(
+                        [int(r["selfId"]) for r in candidates],
+                        {int(t) for t in metas}, wm or 0)
                     if capped and new_replies:
                         advance = min(advance, int(new_replies[0].id) - 1)
                     if advance > (wm or 0):

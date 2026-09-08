@@ -24,6 +24,11 @@ from x_monitor_nodriver import (
 )
 
 
+def _md_contents(card):
+    """卡片 elements 的 lark_md 文本列表（全测试文件共用）。"""
+    return [el.get("text", {}).get("content", "") for el in card["elements"]]
+
+
 # ── _parse_proxy ────────────────────────────────────────────────────
 
 
@@ -169,9 +174,6 @@ class TestBuildNewTweetsCard:
     def _tweet(self, text):
         return Tweet(id="1", text=text, link="https://x.com/binancezh/status/1", pub_time="2026-08-26T07:14:57.000Z")
 
-    def _contents(self, card):
-        return [el.get("text", {}).get("content", "") for el in card["elements"]]
-
     def test_has_alpha_top_banner_and_red_header(self):
         results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安 Alpha 将成为首个上线 X 的平台！")])]
         card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
@@ -179,16 +181,16 @@ class TestBuildNewTweetsCard:
         # 标题含 ALPHA，通知预览可直接分辨
         assert "ALPHA" in card["header"]["title"]["content"]
         # 第一条元素是总横幅
-        assert ALPHA_BANNER in self._contents(card)[0]
+        assert ALPHA_BANNER in _md_contents(card)[0]
         # 命中推文区块顶部也含横幅
-        assert any(ALPHA_BANNER in c and "上线" in c for c in self._contents(card)[1:])
+        assert any(ALPHA_BANNER in c and "上线" in c for c in _md_contents(card)[1:])
 
     def test_no_alpha_no_banner_blue_header(self):
         results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安发布季度报告，业绩创新高。")])]
         card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
         assert card["header"]["template"] == "blue"
         assert "ALPHA" not in card["header"]["title"]["content"]
-        assert all(ALPHA_BANNER not in c for c in self._contents(card))
+        assert all(ALPHA_BANNER not in c for c in _md_contents(card))
 
     def test_mixed_only_matching_tweet_marked(self):
         results = [AccountResult(handle="binancezh", tweets=[
@@ -196,7 +198,7 @@ class TestBuildNewTweetsCard:
             self._tweet("普通资讯，无关激励。"),
         ])]
         card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
-        contents = self._contents(card)
+        contents = _md_contents(card)
         marked = [c for c in contents if "盲盒" in c or "普通资讯" in c]
         assert len([c for c in marked if ALPHA_BANNER in c]) == 1  # 只有盲盒那条
 
@@ -223,7 +225,7 @@ class TestFindAlphaParents:
         self._mk(tmp_path, "102", "binancezh", self.ALPHA_TEXT, now - timedelta(days=8))
         parents = find_alpha_parents(str(tmp_path), now)
         assert set(parents.keys()) == {"100"}
-        assert parents["100"][0] == "binancezh"
+        assert parents["100"] == "binancezh"
 
     def test_window_boundary(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -297,7 +299,7 @@ from x_monitor_nodriver import select_new_replies
 
 
 class TestSelectNewReplies:
-    P = {"100": ("binancezh", "Alpha 主帖")}
+    P = {"100": "binancezh"}
     # 父帖信息来自 syndication 接口（DOM 对自回复不渲染父帖，实测）
     M = {"200": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancezh"}}
 
@@ -402,13 +404,10 @@ class TestCardWithReplies:
                      pub_time="2026-09-01T08:00:00.000Z",
                      parent_id="100", parent_link="https://x.com/binancezh/status/100")
 
-    def _contents(self, card):
-        return [el.get("text", {}).get("content", "") for el in card["elements"]]
-
     def test_replies_alone_still_marked_alpha_with_parent_link(self):
         results = [AccountResult(handle="binancezh", tweets=[], replies=[self._reply()])]
         card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
-        contents = "\n".join(self._contents(card))
+        contents = "\n".join(_md_contents(card))
         assert card["header"]["template"] == "red"
         assert "ALPHA" in card["header"]["title"]["content"]
         assert "Alpha 帖新回复" in contents
@@ -419,7 +418,7 @@ class TestCardWithReplies:
         results = [AccountResult(handle="binancezh",
                                  tweets=[Tweet(id="1", text="普通资讯", link="l", pub_time="")])]
         card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
-        contents = "\n".join(self._contents(card))
+        contents = "\n".join(_md_contents(card))
         assert "Alpha 帖新回复" not in contents
         assert "Alpha 楼内回复" not in contents
 
@@ -452,7 +451,7 @@ class TestMonitorReplyWiring:
         monkeypatch.setattr(BrowserSession, "fetch_replies",
                             classmethod(_async((reply_rows, FetchStatus.OK))))
         monkeypatch.setattr("x_monitor_nodriver.find_alpha_parents",
-                            lambda backup_dir, now: {"100": ("binancezh", "Alpha 主帖")})
+                            lambda backup_dir, now: {"100": "binancezh"})
         monkeypatch.setattr("x_monitor_nodriver._backup_tweets", lambda handle, items: None)
         monkeypatch.setattr("x_monitor_nodriver.fetch_tweet_meta",
                             lambda tid, proxy: {"in_reply_to_status_id_str": meta_parent,
@@ -520,7 +519,7 @@ class TestMonitorReplyWiring:
         monkeypatch.setattr(BrowserSession, "fetch_tweets", classmethod(fake_tweets))
         monkeypatch.setattr(BrowserSession, "fetch_replies", classmethod(fake_replies))
         monkeypatch.setattr("x_monitor_nodriver.find_alpha_parents",
-                            lambda d, now: {"100": ("binancezh", "Alpha 主帖")})
+                            lambda d, now: {"100": "binancezh"})
         asyncio.run(Monitor(config, cache, notifier).run())
         # wallet 的 tweet 卡片已发（interactive），且发了过期提醒
         assert any(m == "interactive" and "status/500" in c for m, c in sent)
@@ -533,3 +532,22 @@ class TestMonitorReplyWiring:
                                 cache_data={"binancezh:replies": "150"},
                                 reply_rows=[self._reply_row("200")], meta_parent="999")
         assert sent == [] and cache.get("binancezh:replies") == "200"
+
+
+# ── 水位前缀推进纯函数 ───────────────────────────────────────────────
+
+from x_monitor_nodriver import _resolved_watermark
+
+
+class TestResolvedWatermark:
+    def test_all_resolved(self):
+        assert _resolved_watermark([201, 202, 203], {201, 202, 203}, 200) == 203
+
+    def test_gap_stops_at_prefix(self):
+        assert _resolved_watermark([201, 202, 203], {201, 203}, 200) == 201
+
+    def test_head_unresolved_no_advance(self):
+        assert _resolved_watermark([201, 202], {202}, 200) == 200
+
+    def test_empty(self):
+        assert _resolved_watermark([], set(), 200) == 200
