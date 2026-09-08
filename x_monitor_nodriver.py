@@ -792,6 +792,8 @@ class Monitor:
         cookie_expired = False
         all_results: list[AccountResult] = []
 
+        alpha_parents: Optional[dict] = None  # 懒构建的活跃 Alpha 父帖集合
+
         for handle in self.config.handles:
             account_result = await self._check_account(handle)
 
@@ -800,8 +802,39 @@ class Monitor:
                 break
 
             if account_result.tweets:
-                all_results.append(account_result)
                 self.cache.update(handle, str(max(t.id_numeric for t in account_result.tweets)))
+
+            # ── Alpha 楼内回复监控 ──
+            if alpha_parents is None:
+                alpha_parents = find_alpha_parents(
+                    os.path.join(_SCRIPT_DIR, "backup"), datetime.now(timezone.utc))
+                log(f"[REPLIES] 活跃 Alpha 父帖: {len(alpha_parents)} 条")
+
+            if alpha_parents:
+                try:
+                    rows, rstatus = await BrowserSession.fetch_replies(handle, self.config)
+                except Exception as e:
+                    log(f"[FAIL][REPLIES] @{handle}: {e}")
+                    rows, rstatus = [], FetchStatus.FAIL
+                if rstatus == FetchStatus.EXPIRED:
+                    cookie_expired = True
+                    break
+                if rows:
+                    key = f"{handle}:replies"
+                    wm = self.cache.get(key)
+                    # 无水位（首跑）不做静默种子：父帖 7 天窗口本身已压制历史噪音，命中即推
+                    new_replies = select_new_replies(rows, handle, alpha_parents,
+                                                     int(wm) if wm else None)
+                    if len(new_replies) > MAX_REPLIES_PER_PUSH:
+                        new_replies = new_replies[-MAX_REPLIES_PER_PUSH:]
+                    if new_replies:
+                        account_result.replies = new_replies
+                        _backup_tweets(handle, new_replies)
+                        self.cache.update(key, str(max(r.id_numeric for r in new_replies)))
+                        log(f"[REPLIES] @{handle}: {len(new_replies)} 条 Alpha 楼内新回复")
+
+            if account_result.tweets or account_result.replies:
+                all_results.append(account_result)
 
         # Send consolidated notification
         send_ok = False
@@ -863,9 +896,9 @@ if __name__ == "__main__":
         cache.load()
         notifier = FeishuNotifier(config.feishu_app_id, config.feishu_app_secret, config.feishu_chat_id)
         monitor = Monitor(config, cache, notifier)
-        asyncio.run(asyncio.wait_for(monitor.run(), timeout=120))
+        asyncio.run(asyncio.wait_for(monitor.run(), timeout=240))
     except asyncio.TimeoutError:
-        log("❌ X Monitor 超时（120s），强制退出")
+        log("❌ X Monitor 超时（240s），强制退出")
         sys.exit(1)
     except Exception as e:
         import traceback

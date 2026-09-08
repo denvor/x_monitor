@@ -359,3 +359,67 @@ class TestCardWithReplies:
         contents = "\n".join(self._contents(card))
         assert "Alpha 帖新回复" not in contents
         assert "Alpha 楼内回复" not in contents
+
+
+# ── Monitor 回复接线（异步假件） ─────────────────────────────────────
+
+import asyncio
+from types import SimpleNamespace
+from x_monitor_nodriver import Cache, FetchStatus, Monitor, BrowserSession, FetchResult
+
+
+def _async(value):
+    async def _coro(*a, **kw):
+        return value
+    return _coro
+
+
+class TestMonitorReplyWiring:
+    def _run(self, tmp_path, monkeypatch, *, cache_data, reply_rows):
+        config = SimpleNamespace(handles=["binancezh"], max_retries=0, retry_delay=0, fetch_count=3)
+        cache = Cache(str(tmp_path / "cache.json"))
+        cache._data = dict(cache_data)
+        sent = []
+        notifier = FeishuNotifier("id", "secret", "chat")
+        notifier._post = lambda msg_type, content: sent.append(content) or True
+
+        monkeypatch.setattr(BrowserSession, "fetch_tweets",
+                            classmethod(_async(FetchResult(tweets=[], status=FetchStatus.OK))))
+        monkeypatch.setattr(BrowserSession, "fetch_replies",
+                            classmethod(_async((reply_rows, FetchStatus.OK))))
+        monkeypatch.setattr("x_monitor_nodriver.find_alpha_parents",
+                            lambda backup_dir, now: {"100": ("binancezh", "Alpha 主帖")})
+        monkeypatch.setattr("x_monitor_nodriver._backup_tweets", lambda handle, items: None)
+        asyncio.run(Monitor(config, cache, notifier).run())
+        return cache, sent
+
+    def _reply_row(self, sid="200"):
+        return {"selfLink": f"https://x.com/binancezh/status/{sid}", "selfHandle": "binancezh",
+                "selfId": sid, "parentLink": "https://x.com/binancezh/status/100",
+                "parentHandle": "binancezh", "parentId": "100",
+                "text": "👉 补充链接", "pubTime": "2026-09-01T08:00:00.000Z"}
+
+    def test_first_run_pushes_matching_replies(self, tmp_path, monkeypatch):
+        # 无水位时不再"静默种子"：父帖过滤已压制历史噪音，命中即推（设计变更，见 spec §5）
+        cache, sent = self._run(tmp_path, monkeypatch, cache_data={}, reply_rows=[self._reply_row()])
+        assert cache.get("binancezh:replies") == "200"
+        assert len(sent) == 1
+        card = json.loads(sent[0])
+        contents = "\n".join(el.get("text", {}).get("content", "") for el in card["elements"])
+        assert "Alpha 帖新回复" in contents
+
+    def test_new_reply_above_watermark_pushed_and_watermark_moved(self, tmp_path, monkeypatch):
+        cache, sent = self._run(tmp_path, monkeypatch,
+                                cache_data={"binancezh:replies": "150"}, reply_rows=[self._reply_row("200")])
+        assert len(sent) == 1
+        # _send_card 的 JSON 序列化会转义非 ASCII，先解析再断言
+        card = json.loads(sent[0])
+        contents = "\n".join(el.get("text", {}).get("content", "") for el in card["elements"])
+        assert "Alpha 帖新回复" in contents
+        assert card["header"]["template"] == "red"
+        assert cache.get("binancezh:replies") == "200"
+
+    def test_reply_below_watermark_silent(self, tmp_path, monkeypatch):
+        cache, sent = self._run(tmp_path, monkeypatch,
+                                cache_data={"binancezh:replies": "250"}, reply_rows=[self._reply_row("200")])
+        assert sent == [] and cache.get("binancezh:replies") == "250"
