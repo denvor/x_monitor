@@ -119,6 +119,40 @@ def classify_alpha(text: str) -> Optional[AlphaCategory]:
     return None
 
 
+# ── Alpha 楼内回复监控：父帖集合 ─────────────────────────────────────
+
+ALPHA_REPLY_WINDOW_DAYS = 7   # 只监控 7 天内 Alpha 推文下的回复
+MAX_REPLIES_PER_PUSH = 5      # 单账号单轮回复推送上限（防刷屏）
+
+
+def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, tuple[str, str]]:
+    """扫描备份目录，返回 7 天内 Alpha 类推文集合。
+
+    返回 {推文ID: (handle, 正文)}；损坏文件 / 缺字段文件静默跳过。
+    """
+    parents: dict[str, tuple[str, str]] = {}
+    try:
+        names = os.listdir(backup_dir)
+    except OSError:
+        return parents
+    cutoff = now - timedelta(days=ALPHA_REPLY_WINDOW_DAYS)
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(backup_dir, name), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            pub = datetime.fromisoformat(str(data["pubTime"]).replace("Z", "+00:00"))
+            if pub < cutoff:
+                continue
+            if classify_alpha(data.get("text", "")) is None:
+                continue
+            parents[str(data["id"])] = (data.get("handle", ""), data.get("text", ""))
+        except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return parents
+
+
 def _parse_proxy(value: Optional[str]) -> Optional[str]:
     """Parse proxy config value.
 

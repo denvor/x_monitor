@@ -1,9 +1,11 @@
 """Tests for x_monitor_nodriver.py configuration and browser args."""
 
 import configparser
+import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 # Ensure the script directory is on the path
@@ -197,3 +199,48 @@ class TestBuildNewTweetsCard:
         contents = self._contents(card)
         marked = [c for c in contents if "盲盒" in c or "普通资讯" in c]
         assert len([c for c in marked if ALPHA_BANNER in c]) == 1  # 只有盲盒那条
+
+
+# ── find_alpha_parents ──────────────────────────────────────────────
+
+from x_monitor_nodriver import ALPHA_REPLY_WINDOW_DAYS, find_alpha_parents
+
+
+class TestFindAlphaParents:
+    ALPHA_TEXT = "币安 Alpha 将在 8 月 26 日成为首个上线 Teller（DEBIT）的平台！"
+    PLAIN_TEXT = "币安发布季度报告，业绩创新高。"
+
+    def _mk(self, tmp_path, tid, handle, text, pub_dt):
+        data = {"id": tid, "handle": handle, "text": text,
+                "link": f"https://x.com/{handle}/status/{tid}",
+                "pubTime": pub_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")}
+        (tmp_path / f"{tid}.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_only_alpha_within_window_selected(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        self._mk(tmp_path, "100", "binancezh", self.ALPHA_TEXT, now - timedelta(days=1))
+        self._mk(tmp_path, "101", "binancezh", self.PLAIN_TEXT, now - timedelta(days=1))
+        self._mk(tmp_path, "102", "binancezh", self.ALPHA_TEXT, now - timedelta(days=8))
+        parents = find_alpha_parents(str(tmp_path), now)
+        assert set(parents.keys()) == {"100"}
+        assert parents["100"][0] == "binancezh"
+
+    def test_window_boundary(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        self._mk(tmp_path, "200", "binancezh", self.ALPHA_TEXT,
+                 now - timedelta(days=ALPHA_REPLY_WINDOW_DAYS, minutes=1))
+        self._mk(tmp_path, "201", "binancezh", self.ALPHA_TEXT,
+                 now - timedelta(days=ALPHA_REPLY_WINDOW_DAYS - 0.01))
+        parents = find_alpha_parents(str(tmp_path), now)
+        assert "200" not in parents and "201" in parents
+
+    def test_corrupt_and_foreign_files_tolerated(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        (tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
+        (tmp_path / "note.txt").write_text("ignore", encoding="utf-8")
+        self._mk(tmp_path, "300", "binancezh", self.ALPHA_TEXT, now)
+        parents = find_alpha_parents(str(tmp_path), now)
+        assert set(parents.keys()) == {"300"}
+
+    def test_missing_dir_returns_empty(self, tmp_path):
+        assert find_alpha_parents(str(tmp_path / "nope"), datetime.now(timezone.utc)) == {}
