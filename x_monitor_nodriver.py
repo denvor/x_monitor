@@ -706,15 +706,19 @@ class FeishuNotifier:
         若本批存在命中推文，整条消息顶部再加一条总横幅（header 同步变红）。
         """
         total_tweets = sum(len(r.tweets) for r in results)
-        has_alpha = any(classify_alpha(t.text) for r in results for t in r.tweets)
+        total_replies = sum(len(r.replies) for r in results)
+        # 回复的父帖必为 Alpha → 有回复即视为 Alpha 批次
+        has_alpha = total_replies > 0 or any(classify_alpha(t.text) for r in results for t in r.tweets)
 
         elements = []
         if has_alpha:
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": ALPHA_BANNER}})
+        count_line = f"推送时间：{send_time} (北京时间)\n共 {len(results)} 个账号，{total_tweets} 条新推文"
+        if total_replies:
+            count_line += f"，{total_replies} 条 Alpha 楼内回复"
         elements.append({
             "tag": "div",
-            "text": {"tag": "lark_md",
-                     "content": f"推送时间：{send_time} (北京时间)\n共 {len(results)} 个账号，{total_tweets} 条新推文"},
+            "text": {"tag": "lark_md", "content": count_line},
         })
 
         for r in results:
@@ -729,6 +733,16 @@ class FeishuNotifier:
                 )
                 elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
                 log(f"[TWEET] @{r.handle}: {t.link}")
+            # Alpha 帖楼内新回复区块（父帖必为 Alpha → 一律带横幅）
+            for rp in r.replies:
+                content = (
+                    f"{ALPHA_BANNER}\n"
+                    f"🧵 **Alpha 帖新回复**（回复时间：{rp.beijing_time} 北京时间）\n\n"
+                    f"{rp.text}\n\n"
+                    f"[↩️ 查看被回复原帖]({rp.parent_link}) ｜ [🔗 查看此回复]({rp.link})"
+                )
+                elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
+                log(f"[REPLY] @{r.handle}: {rp.link} ← 父帖 {rp.parent_id}")
 
         # 命中 Alpha 时标题带 ALPHA 字样，便于在飞书消息通知预览中直接分辨
         title = "🔴 ALPHA｜X 新帖提醒" if has_alpha else "🔔 X 新帖提醒"

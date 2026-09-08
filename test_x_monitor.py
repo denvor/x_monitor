@@ -329,3 +329,33 @@ class TestSelectNewReplies:
     def test_missing_selfid_tolerated(self):
         out = select_new_replies([self._row(selfId="", selfLink="")], "binancezh", self.P, None)
         assert out == []
+
+
+# ── 卡片渲染：回复区块 ───────────────────────────────────────────────
+
+class TestCardWithReplies:
+    def _reply(self):
+        return Reply(id="900", text="👉 领取链接在此", link="https://x.com/binancezh/status/900",
+                     pub_time="2026-09-01T08:00:00.000Z",
+                     parent_id="100", parent_link="https://x.com/binancezh/status/100")
+
+    def _contents(self, card):
+        return [el.get("text", {}).get("content", "") for el in card["elements"]]
+
+    def test_replies_alone_still_marked_alpha_with_parent_link(self):
+        results = [AccountResult(handle="binancezh", tweets=[], replies=[self._reply()])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
+        contents = "\n".join(self._contents(card))
+        assert card["header"]["template"] == "red"
+        assert "ALPHA" in card["header"]["title"]["content"]
+        assert "Alpha 帖新回复" in contents
+        assert "https://x.com/binancezh/status/100" in contents   # 原帖链接
+        assert "Alpha 楼内回复" in contents                        # 计数行
+
+    def test_normal_push_unchanged_when_no_replies(self):
+        results = [AccountResult(handle="binancezh",
+                                 tweets=[Tweet(id="1", text="普通资讯", link="l", pub_time="")])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
+        contents = "\n".join(self._contents(card))
+        assert "Alpha 帖新回复" not in contents
+        assert "Alpha 楼内回复" not in contents
