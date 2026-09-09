@@ -80,6 +80,7 @@ class Reply(Tweet):
     parent_id: str = ""
     parent_link: str = ""
     parent_handle: str = ""
+    parent_text: str = ""
 
 
 @dataclass
@@ -135,10 +136,17 @@ def classify_alpha(text: str) -> Optional[AlphaCategory]:
 
 ALPHA_REPLY_WINDOW_DAYS = 7   # 只监控 7 天内 Alpha 推文下的回复
 MAX_REPLIES_PER_PUSH = 5      # 单账号单轮回复推送上限（防刷屏）
+PARENT_QUOTE_MAX_CHARS = 140  # 回复条目下引用的原帖正文截断长度（全文走原帖链接）
 
 
-def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, str]:
-    """扫描备份目录，返回 7 天内 Alpha 类推文集合 {推文ID: 作者handle}。
+def _quote_parent(text: str) -> str:
+    """原帖正文压成单行并截断，供回复条目下方引用展示。"""
+    flat = " ".join(text.split())
+    return (flat[:PARENT_QUOTE_MAX_CHARS] + "…") if len(flat) > PARENT_QUOTE_MAX_CHARS else flat
+
+
+def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, dict]:
+    """扫描备份目录，返回 7 天内 Alpha 类推文集合 {推文ID: {"handle", "text"}}。
 
     楼内回复的备份记录（带 parent_link，即 _backup_tweets 写入回复时所加的
     协议字段）不作为父帖，杜绝楼中楼第三层监控。损坏文件静默跳过。
@@ -162,7 +170,8 @@ def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, str]:
                 continue  # 楼内回复不作为父帖候选（避免楼中楼第三层监控）
             if classify_alpha(data.get("text", "")) is None:
                 continue
-            parents[str(data["id"])] = data.get("handle", "")
+            parents[str(data["id"])] = {"handle": data.get("handle", ""),
+                                        "text": data.get("text", "")}
         except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
             continue
     return parents
@@ -182,7 +191,7 @@ def _is_reply_candidate(r: dict, handle: str, watermark: Optional[int]) -> bool:
 
 
 def select_new_replies(rows: list[dict], handle: str,
-                       parents: dict[str, str],
+                       parents: dict[str, dict],
                        watermark: Optional[int],
                        metas: dict[str, dict]) -> list[Reply]:
     """从搜索页候选中筛出应推送的 Alpha 楼内新回复（按 ID 升序）。
@@ -205,10 +214,12 @@ def select_new_replies(rows: list[dict], handle: str,
         parent_id = meta.get("in_reply_to_status_id_str") or ""
         if parent_id not in parents:
             continue
-        parent_handle = parents[parent_id] or handle
+        parent_info = parents[parent_id]
+        parent_handle = parent_info["handle"] or handle
         out[rid] = Reply(id=rid, text=r.get("text", ""), link=r.get("selfLink", ""),
                          pub_time=r.get("pubTime", ""),
                          parent_id=parent_id, parent_handle=parent_handle,
+                         parent_text=parent_info.get("text", ""),
                          parent_link=f"https://x.com/{parent_handle}/status/{parent_id}")
     return sorted(out.values(), key=lambda t: t.id_numeric)
 
@@ -841,11 +852,14 @@ class FeishuNotifier:
                 log(f"[TWEET] @{r.handle}: {t.link}")
             # Alpha 帖楼内新回复区块（父帖必为 Alpha → 一律带横幅）
             for rp in r.replies:
+                quote = (f"> 📌 **被回复的原帖**：{_quote_parent(rp.parent_text)}\n\n"
+                         if rp.parent_text else "")
                 content = (
                     f"{ALPHA_BANNER}\n"
                     f"🧵 **Alpha 帖新回复**（@{r.handle} 回复 @{rp.parent_handle}，"
                     f"回复时间：{rp.beijing_time} 北京时间）\n\n"
                     f"{rp.text}\n\n"
+                    f"{quote}"
                     f"[↩️ 查看被回复原帖]({rp.parent_link}) ｜ [🔗 查看此回复]({rp.link})"
                 )
                 elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})

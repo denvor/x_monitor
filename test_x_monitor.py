@@ -229,7 +229,8 @@ class TestFindAlphaParents:
         self._mk(tmp_path, "102", "binancezh", self.ALPHA_TEXT, now - timedelta(days=8))
         parents = find_alpha_parents(str(tmp_path), now)
         assert set(parents.keys()) == {"100"}
-        assert parents["100"] == "binancezh"
+        assert parents["100"]["handle"] == "binancezh"
+        assert parents["100"]["text"] == self.ALPHA_TEXT  # 原帖正文随集合带出，供卡片引用
 
     def test_window_boundary(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -303,7 +304,7 @@ from x_monitor_nodriver import select_new_replies
 
 
 class TestSelectNewReplies:
-    P = {"100": "binancezh"}
+    P = {"100": {"handle": "binancezh", "text": "币安 Alpha 上线 TMRW，空投等你领"}}
     # 父帖信息来自 syndication 接口（DOM 对自回复不渲染父帖，实测）
     M = {"200": {"in_reply_to_status_id_str": "100", "in_reply_to_screen_name": "binancezh"}}
 
@@ -318,6 +319,7 @@ class TestSelectNewReplies:
         assert [r.id for r in out] == ["200"]
         assert out[0].parent_id == "100"
         assert out[0].parent_link == "https://x.com/binancezh/status/100"
+        assert out[0].parent_text == "币安 Alpha 上线 TMRW，空投等你领"
 
     def test_foreign_author_filtered(self):
         # 搜索页结果混入他人推文（selfHandle != handle）
@@ -403,10 +405,11 @@ class TestSyndication:
 # ── 卡片渲染：回复区块 ───────────────────────────────────────────────
 
 class TestCardWithReplies:
-    def _reply(self):
+    def _reply(self, parent_text="币安 Alpha 上线 TMRW，空投等你领"):
         return Reply(id="900", text="👉 领取链接在此", link="https://x.com/binancezh/status/900",
                      pub_time="2026-09-01T08:00:00.000Z",
-                     parent_id="100", parent_link="https://x.com/binancezh/status/100")
+                     parent_id="100", parent_link="https://x.com/binancezh/status/100",
+                     parent_handle="binancezh", parent_text=parent_text)
 
     def test_replies_alone_still_marked_alpha_with_parent_link(self):
         results = [AccountResult(handle="binancezh", tweets=[], replies=[self._reply()])]
@@ -417,6 +420,30 @@ class TestCardWithReplies:
         assert "Alpha 帖新回复" in contents
         assert "https://x.com/binancezh/status/100" in contents   # 原帖链接
         assert "Alpha 楼内回复" in contents                        # 计数行
+
+    def test_card_quotes_parent_text(self):
+        results = [AccountResult(handle="binancezh", tweets=[], replies=[self._reply()])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
+        contents = "\n".join(_md_contents(card))
+        assert "被回复的原帖" in contents
+        assert "币安 Alpha 上线 TMRW，空投等你领" in contents
+
+    def test_parent_quote_flattened_and_truncated(self):
+        long_text = "第一段\n第二段\n" + "啊" * 200
+        results = [AccountResult(handle="binancezh", tweets=[],
+                                 replies=[self._reply(parent_text=long_text)])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
+        contents = "\n".join(_md_contents(card))
+        assert "第一段 第二段 " + "啊" * 132 + "…" in contents   # 压平 + 截断 140（140-8 前缀=132 个「啊」）
+        assert "啊" * 141 not in contents
+
+    def test_no_quote_line_when_parent_text_missing(self):
+        results = [AccountResult(handle="binancezh", tweets=[],
+                                 replies=[self._reply(parent_text="")])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
+        contents = "\n".join(_md_contents(card))
+        assert "被回复的原帖" not in contents
+        assert "Alpha 帖新回复" in contents  # 回复条目本身不受影响
 
     def test_normal_push_unchanged_when_no_replies(self):
         results = [AccountResult(handle="binancezh",
@@ -455,7 +482,7 @@ class TestMonitorReplyWiring:
         monkeypatch.setattr(BrowserSession, "fetch_replies",
                             classmethod(_async((reply_rows, FetchStatus.OK))))
         monkeypatch.setattr("x_monitor_nodriver.find_alpha_parents",
-                            lambda backup_dir, now: {"100": "binancezh"})
+                            lambda backup_dir, now: {"100": {"handle": "binancezh", "text": "Alpha 主推文"}})
         monkeypatch.setattr("x_monitor_nodriver._backup_tweets", lambda handle, items: None)
         monkeypatch.setattr("x_monitor_nodriver.fetch_tweet_meta",
                             lambda tid, proxy: {"in_reply_to_status_id_str": meta_parent,
@@ -523,7 +550,7 @@ class TestMonitorReplyWiring:
         monkeypatch.setattr(BrowserSession, "fetch_tweets", classmethod(fake_tweets))
         monkeypatch.setattr(BrowserSession, "fetch_replies", classmethod(fake_replies))
         monkeypatch.setattr("x_monitor_nodriver.find_alpha_parents",
-                            lambda d, now: {"100": "binancezh"})
+                            lambda d, now: {"100": {"handle": "binancezh", "text": "Alpha 主推文"}})
         asyncio.run(Monitor(config, cache, notifier).run())
         # wallet 的 tweet 卡片已发（interactive），且发了过期提醒
         assert any(m == "interactive" and "status/500" in c for m, c in sent)

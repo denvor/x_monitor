@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.8] - 2026-09-08
+
+### Added
+- **回复卡片附原帖正文**：Alpha 楼内回复条目下方以引用块展示被回复原帖正文（压平单行、超 140 字截断），便于不点开链接即可了解上下文；原帖正文经 `find_alpha_parents`（值升级为 `{handle, text}`）→ `Reply.parent_text` 带出；正文缺失时引用行自动省略
+
 ## [4.7] - 2026-09-08
 
 ### Changed
