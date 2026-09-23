@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.9] - 2026-09-23
+
+### Changed
+- **飞书卡片改为折叠式**：每条推文/楼内回复收进 `collapsible_panel` 折叠面板（默认收起），面板标题显示前 30 字摘要，Alpha 条目标题带 🔴 ALPHA 标记（收起态亦可分辨）；全文、原帖引用与链接移入面板内。顶部 ALPHA 总横幅与计数行保持常显，通知预览不受影响。需飞书客户端 ≥ V7.9
+
 ## [4.8] - 2026-09-08
 
 ### Added

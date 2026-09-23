@@ -25,8 +25,21 @@ from x_monitor_nodriver import (
 
 
 def _md_contents(card):
-    """卡片 elements 的 lark_md 文本列表（全测试文件共用）。"""
-    return [el.get("text", {}).get("content", "") for el in card["elements"]]
+    """卡片全部可见文本（div lark_md、折叠面板标题及面板内 markdown），共用。"""
+    out = []
+
+    def walk(elements):
+        for el in elements:
+            if el.get("tag") == "div":
+                out.append(el.get("text", {}).get("content", ""))
+            elif el.get("tag") == "markdown":
+                out.append(el.get("content", ""))
+            elif el.get("tag") == "collapsible_panel":
+                out.append(el.get("header", {}).get("title", {}).get("content", ""))
+                walk(el.get("elements", []))
+
+    walk(card["elements"])
+    return out
 
 
 # ── _parse_proxy ────────────────────────────────────────────────────
@@ -195,6 +208,46 @@ class TestBuildNewTweetsCard:
         assert card["header"]["template"] == "blue"
         assert "ALPHA" not in card["header"]["title"]["content"]
         assert all(ALPHA_BANNER not in c for c in _md_contents(card))
+
+    def _panels(self, card):
+        return [el for el in card["elements"] if el.get("tag") == "collapsible_panel"]
+
+    def test_each_tweet_wrapped_in_collapsed_panel(self):
+        results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安发布季度报告，业绩创新高。")])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
+        panels = self._panels(card)
+        assert len(panels) == 1
+        assert panels[0]["expanded"] is False
+        assert "季度报告" in panels[0]["header"]["title"]["content"]
+        body = panels[0]["elements"][0]["content"]
+        assert "业绩创新高" in body and "x.com/binancezh/status/1" in body  # 全文+链接在面板内
+
+    def test_panel_title_summary_truncated(self):
+        long_text = "开" * 60
+        results = [AccountResult(handle="binancezh", tweets=[self._tweet(long_text)])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
+        title = self._panels(card)[0]["header"]["title"]["content"]
+        assert "开" * 30 + "…" in title and "开" * 31 not in title
+        assert "开" * 60 in self._panels(card)[0]["elements"][0]["content"]  # 面板内全文
+
+    def test_alpha_tweet_panel_title_marked(self):
+        results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安 Alpha 将成为首个上线 X 的平台！")])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
+        title = self._panels(card)[0]["header"]["title"]["content"]
+        assert "ALPHA" in title  # 收起状态下也能分辨 Alpha
+
+    def test_reply_panel_title_marks_alpha_thread(self):
+        rp = Reply(id="900", text="👉 领取链接在此", link="https://x.com/binancezh/status/900",
+                   pub_time="2026-09-01T08:00:00.000Z", parent_id="100",
+                   parent_link="https://x.com/binancezh/status/100",
+                   parent_handle="binancezh", parent_text="原帖正文")
+        results = [AccountResult(handle="binancezh", tweets=[], replies=[rp])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
+        panels = self._panels(card)
+        assert len(panels) == 1
+        assert "Alpha 帖新回复" in panels[0]["header"]["title"]["content"]
+        body = panels[0]["elements"][0]["content"]
+        assert "领取链接在此" in body and "被回复的原帖" in body
 
     def test_mixed_only_matching_tweet_marked(self):
         results = [AccountResult(handle="binancezh", tweets=[
@@ -500,7 +553,7 @@ class TestMonitorReplyWiring:
         assert cache.get("binancezh:replies") == "200"
         assert len(sent) == 1
         card = json.loads(sent[0])
-        contents = "\n".join(el.get("text", {}).get("content", "") for el in card["elements"])
+        contents = "\n".join(_md_contents(card))
         assert "Alpha 帖新回复" in contents
 
     def test_new_reply_above_watermark_pushed_and_watermark_moved(self, tmp_path, monkeypatch):
@@ -509,7 +562,7 @@ class TestMonitorReplyWiring:
         assert len(sent) == 1
         # _send_card 的 JSON 序列化会转义非 ASCII，先解析再断言
         card = json.loads(sent[0])
-        contents = "\n".join(el.get("text", {}).get("content", "") for el in card["elements"])
+        contents = "\n".join(_md_contents(card))
         assert "Alpha 帖新回复" in contents
         assert card["header"]["template"] == "red"
         assert cache.get("binancezh:replies") == "200"
@@ -526,7 +579,7 @@ class TestMonitorReplyWiring:
                                 cache_data={"binancezh:replies": "150"}, reply_rows=rows)
         assert len(sent) == 1
         card = json.loads(sent[0])
-        contents = "\n".join(el.get("text", {}).get("content", "") for el in card["elements"])
+        contents = "\n".join(_md_contents(card))
         assert "status/207" in contents and "status/201" not in contents  # 推了最新 5 条(203-207)
         # 水位 ≤ 202（203-1）：201、202 下轮仍会被选
         assert int(cache.get("binancezh:replies")) <= 202

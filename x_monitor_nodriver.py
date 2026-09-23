@@ -137,12 +137,45 @@ def classify_alpha(text: str) -> Optional[AlphaCategory]:
 ALPHA_REPLY_WINDOW_DAYS = 7   # 只监控 7 天内 Alpha 推文下的回复
 MAX_REPLIES_PER_PUSH = 5      # 单账号单轮回复推送上限（防刷屏）
 PARENT_QUOTE_MAX_CHARS = 140  # 回复条目下引用的原帖正文截断长度（全文走原帖链接）
+PANEL_SUMMARY_CHARS = 30      # 折叠面板标题的推文摘要截断长度
+
+
+def _flat_trunc(text: str, limit: int) -> str:
+    """正文压成单行并截断（超出加 …）。"""
+    flat = " ".join(text.split())
+    return (flat[:limit] + "…") if len(flat) > limit else flat
 
 
 def _quote_parent(text: str) -> str:
     """原帖正文压成单行并截断，供回复条目下方引用展示。"""
-    flat = " ".join(text.split())
-    return (flat[:PARENT_QUOTE_MAX_CHARS] + "…") if len(flat) > PARENT_QUOTE_MAX_CHARS else flat
+    return _flat_trunc(text, PARENT_QUOTE_MAX_CHARS)
+
+
+def _summarize(text: str) -> str:
+    """推文摘要，用作折叠面板标题。"""
+    return _flat_trunc(text, PANEL_SUMMARY_CHARS)
+
+
+def _collapsible_panel(title: str, body: str) -> dict:
+    """飞书折叠面板（默认收起），内容用 markdown 组件承载。
+
+    需飞书客户端 ≥ V7.9；面板是 2.0 组件，混用进 1.0 卡片已真机验证。
+    """
+    return {
+        "tag": "collapsible_panel",
+        "expanded": False,
+        "header": {
+            "title": {"tag": "markdown", "content": title},
+            "vertical_align": "center",
+            "icon": {"tag": "standard_icon", "token": "down-small-ccm_outlined",
+                     "size": "16px 16px"},
+            "icon_position": "right",
+            "icon_expanded_angle": -180,
+        },
+        "border": {"color": "grey", "corner_radius": "6px"},
+        "padding": "8px 8px 8px 8px",
+        "elements": [{"tag": "markdown", "content": body}],
+    }
 
 
 def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, dict]:
@@ -841,28 +874,29 @@ class FeishuNotifier:
         for r in results:
             elements.append({"tag": "hr"})
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**@{r.handle}**"}})
+            # 每条推文收进折叠面板：标题=摘要（默认可见），全文与链接展开后可见
             for i, t in enumerate(r.tweets, 1):
-                banner = f"{ALPHA_BANNER}\n" if classify_alpha(t.text) else ""
-                content = (
-                    f"{banner}{i}. 推文时间：{t.beijing_time} (北京时间)\n\n"
-                    f"{t.text}\n\n"
-                    f"[🔗 查看原帖]({t.link})"
-                )
-                elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
+                is_alpha = bool(classify_alpha(t.text))
+                title = (f"🔴 ALPHA｜{_summarize(t.text)}" if is_alpha
+                         else f"{i}. {_summarize(t.text)}")
+                banner = f"{ALPHA_BANNER}\n" if is_alpha else ""
+                body = (f"{banner}推文时间：{t.beijing_time} (北京时间)\n\n"
+                        f"{t.text}\n\n"
+                        f"[🔗 查看原帖]({t.link})")
+                elements.append(_collapsible_panel(title, body))
                 log(f"[TWEET] @{r.handle}: {t.link}")
-            # Alpha 帖楼内新回复区块（父帖必为 Alpha → 一律带横幅）
+            # Alpha 帖楼内新回复区块（父帖必为 Alpha → 标题带 ALPHA 标记）
             for rp in r.replies:
                 quote = (f"> 📌 **被回复的原帖**：{_quote_parent(rp.parent_text)}\n\n"
                          if rp.parent_text else "")
-                content = (
-                    f"{ALPHA_BANNER}\n"
-                    f"🧵 **Alpha 帖新回复**（@{r.handle} 回复 @{rp.parent_handle}，"
-                    f"回复时间：{rp.beijing_time} 北京时间）\n\n"
-                    f"{rp.text}\n\n"
-                    f"{quote}"
-                    f"[↩️ 查看被回复原帖]({rp.parent_link}) ｜ [🔗 查看此回复]({rp.link})"
-                )
-                elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
+                title = (f"🧵 🔴 Alpha 帖新回复｜@{r.handle} 回复 @{rp.parent_handle}"
+                         f"｜{_summarize(rp.text)}")
+                body = (f"{ALPHA_BANNER}\n"
+                        f"回复时间：{rp.beijing_time} (北京时间)\n\n"
+                        f"{rp.text}\n\n"
+                        f"{quote}"
+                        f"[↩️ 查看被回复原帖]({rp.parent_link}) ｜ [🔗 查看此回复]({rp.link})")
+                elements.append(_collapsible_panel(title, body))
                 log(f"[REPLY] @{r.handle}: {rp.link} ← 父帖 {rp.parent_id}")
 
         # 命中 Alpha 时标题带 ALPHA 字样，便于在飞书消息通知预览中直接分辨
