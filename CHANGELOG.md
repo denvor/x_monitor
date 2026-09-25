@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.10] - 2026-09-25
+
+### Changed
+- **卡片迁移飞书 JSON 2.0 结构**（`schema: "2.0"` + `body.elements`）：`collapsible_panel` 的 `header.position: "bottom"` 仅在 2.0 下生效
+- **双层折叠「总开子合」**（结构照抄 `aihot_daily_push.py` 实测方案，要点记录于 `docs/FEISHU-CARD-COLLAPSE.md`）：ALPHA 横幅与推送摘要常显于总面板外；明细（@账号行 + 逐条子面板）收进初始展开的总面板，其标题栏「📥 **折叠全部** · N 帖 M 回复」（蓝色加粗，`position: "bottom"`）置于卡片底部，读到底就地一键收起、再点展开；子面板展开状态在总面板收放后保持不变
+
 ## [4.9] - 2026-09-23
 
 ### Changed

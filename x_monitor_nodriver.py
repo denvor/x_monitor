@@ -156,26 +156,38 @@ def _summarize(text: str) -> str:
     return _flat_trunc(text, PANEL_SUMMARY_CHARS)
 
 
-def _collapsible_panel(title: str, body: str) -> dict:
-    """飞书折叠面板（默认收起），内容用 markdown 组件承载。
+def _collapsible_panel(title: str, elements: list, expanded: bool = False,
+                       header_position: str = "top") -> dict:
+    """飞书折叠面板，需飞书客户端 ≥ V7.9（面板为 2.0 组件，混用进 1.0 卡片已真机验证）。
 
-    需飞书客户端 ≥ V7.9；面板是 2.0 组件，混用进 1.0 卡片已真机验证。
+    标题栏恒可见，右侧箭头即折叠/展开按钮；子面板展开状态在总面板
+    收起再展开后保持不变（docs/FEISHU-CARD-COLLAPSE.md 实测结论）。
+    header_position="bottom" 时标题栏渲染在内容末尾（读到底就地收起）；
+    收起态下无位置差异，展开/收起共用一个按钮，两态文案须通用。
     """
+    header = {
+        "title": {"tag": "markdown", "content": title},
+        "vertical_align": "center",
+        "icon": {"tag": "standard_icon", "token": "down-small-ccm_outlined",
+                 "size": "16px 16px"},
+        "icon_position": "right",
+        "icon_expanded_angle": -180,
+    }
+    if header_position != "top":  # top 为默认值，显式写入曾疑干扰子面板渲染，仅 bottom 时传
+        header["position"] = header_position
     return {
         "tag": "collapsible_panel",
-        "expanded": False,
-        "header": {
-            "title": {"tag": "markdown", "content": title},
-            "vertical_align": "center",
-            "icon": {"tag": "standard_icon", "token": "down-small-ccm_outlined",
-                     "size": "16px 16px"},
-            "icon_position": "right",
-            "icon_expanded_angle": -180,
-        },
+        "expanded": expanded,
+        "header": header,
         "border": {"color": "grey", "corner_radius": "6px"},
         "padding": "8px 8px 8px 8px",
-        "elements": [{"tag": "markdown", "content": body}],
+        "elements": elements,
     }
+
+
+def _md_el(content: str) -> dict:
+    """markdown 元素（可放进折叠面板；div lark_md 不可作为面板子元素）。"""
+    return {"tag": "markdown", "content": content}
 
 
 def find_alpha_parents(backup_dir: str, now: datetime) -> dict[str, dict]:
@@ -854,26 +866,28 @@ class FeishuNotifier:
 
         命中 Alpha 分类的推文，在其区块顶部加一条红色大字号横幅；
         若本批存在命中推文，整条消息顶部再加一条总横幅（header 同步变红）。
+        双层折叠「总开子合」：外层总面板初始展开（标题栏即整卡一键收起按钮），
+        每条推文/回复各收进默认收起的子面板。
         """
         total_tweets = sum(len(r.tweets) for r in results)
         total_replies = sum(len(r.replies) for r in results)
         # 回复的父帖必为 Alpha → 有回复即视为 Alpha 批次
         has_alpha = total_replies > 0 or any(classify_alpha(t.text) for r in results for t in r.tweets)
 
+        # 摘要区常显（总面板外）：收起明细后卡片只剩这几行，见参考实现
+        # ~/work/aihot_daily/aihot_daily_push.py format_daily_report
         elements = []
         if has_alpha:
-            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": ALPHA_BANNER}})
+            elements.append(_md_el(ALPHA_BANNER))
         count_line = f"推送时间：{send_time} (北京时间)\n共 {len(results)} 个账号，{total_tweets} 条新推文"
         if total_replies:
             count_line += f"，{total_replies} 条 Alpha 楼内回复"
-        elements.append({
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": count_line},
-        })
+        elements.append(_md_el(count_line))
 
+        # 明细区（总面板内）全部用 markdown 元素（div lark_md 不能作为折叠面板子元素）
+        inner = []
         for r in results:
-            elements.append({"tag": "hr"})
-            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**@{r.handle}**"}})
+            inner.append(_md_el(f"**@{r.handle}**"))
             # 每条推文收进折叠面板：标题=摘要（默认可见），全文与链接展开后可见
             for i, t in enumerate(r.tweets, 1):
                 is_alpha = bool(classify_alpha(t.text))
@@ -883,7 +897,7 @@ class FeishuNotifier:
                 body = (f"{banner}推文时间：{t.beijing_time} (北京时间)\n\n"
                         f"{t.text}\n\n"
                         f"[🔗 查看原帖]({t.link})")
-                elements.append(_collapsible_panel(title, body))
+                inner.append(_collapsible_panel(title, [_md_el(body)]))
                 log(f"[TWEET] @{r.handle}: {t.link}")
             # Alpha 帖楼内新回复区块（父帖必为 Alpha → 标题带 ALPHA 标记）
             for rp in r.replies:
@@ -896,18 +910,32 @@ class FeishuNotifier:
                         f"{rp.text}\n\n"
                         f"{quote}"
                         f"[↩️ 查看被回复原帖]({rp.parent_link}) ｜ [🔗 查看此回复]({rp.link})")
-                elements.append(_collapsible_panel(title, body))
+                inner.append(_collapsible_panel(title, [_md_el(body)]))
                 log(f"[REPLY] @{r.handle}: {rp.link} ← 父帖 {rp.parent_id}")
+
+        # 外层总面板（「总开子合」，照抄 aihot_daily_push.py 的实测结构）：
+        # 初始展开、标题栏置于卡片底部——读到底就地一键收起明细，
+        # 收起后上方摘要常显，标题栏即再点展开的按钮（两态通用文案）。
+        parts = ([f"{total_tweets} 帖"] if total_tweets else []) + \
+                ([f"{total_replies} 回复"] if total_replies else [])
+        count_txt = " · ".join(parts) if parts else "无新帖"
+        master_title = f"📥 <font color='blue'>**折叠全部**</font> · {count_txt}"
+        elements.append({"tag": "hr"})
+        elements.append(_collapsible_panel(master_title, inner, expanded=True,
+                                           header_position="bottom"))
 
         # 命中 Alpha 时标题带 ALPHA 字样，便于在飞书消息通知预览中直接分辨
         title = "🔴 ALPHA｜X 新帖提醒" if has_alpha else "🔔 X 新帖提醒"
+        # JSON 2.0 结构：折叠面板 header.position="bottom" 仅在 2.0 下生效
+        # （骨架见 docs/FEISHU-CARD-COLLAPSE.md §2）
         return {
+            "schema": "2.0",
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "lark_md", "content": title},
+                "title": {"tag": "plain_text", "content": title},
                 "template": "red" if has_alpha else "blue",
             },
-            "elements": elements,
+            "body": {"elements": elements},
         }
 
     def send_expired(self) -> bool:

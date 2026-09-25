@@ -38,8 +38,13 @@ def _md_contents(card):
                 out.append(el.get("header", {}).get("title", {}).get("content", ""))
                 walk(el.get("elements", []))
 
-    walk(card["elements"])
+    walk(_root_el(card))
     return out
+
+
+def _root_el(card):
+    """卡片根 elements（兼容 1.0 顶层 elements 与 2.0 body.elements）。"""
+    return card.get("body", {}).get("elements", card.get("elements", []))
 
 
 # ── _parse_proxy ────────────────────────────────────────────────────
@@ -197,10 +202,11 @@ class TestBuildNewTweetsCard:
         assert card["header"]["template"] == "red"
         # 标题含 ALPHA，通知预览可直接分辨
         assert "ALPHA" in card["header"]["title"]["content"]
-        # 第一条元素是总横幅
+        # 首个可见文本是常显的总横幅（摘要区在总面板外，收起明细后仍可见）
         assert ALPHA_BANNER in _md_contents(card)[0]
-        # 命中推文区块顶部也含横幅
-        assert any(ALPHA_BANNER in c and "上线" in c for c in _md_contents(card)[1:])
+        # 总横幅在卡片内（现位于总面板中），命中推文区块顶部也含横幅
+        assert any(ALPHA_BANNER in c for c in _md_contents(card))
+        assert any(ALPHA_BANNER in c and "上线" in c for c in _md_contents(card))
 
     def test_no_alpha_no_banner_blue_header(self):
         results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安发布季度报告，业绩创新高。")])]
@@ -210,7 +216,30 @@ class TestBuildNewTweetsCard:
         assert all(ALPHA_BANNER not in c for c in _md_contents(card))
 
     def _panels(self, card):
-        return [el for el in card["elements"] if el.get("tag") == "collapsible_panel"]
+        """推位子面板（收起态的那些，不含展开的总面板）。"""
+        return [el for el in _root_el(card)[-1]["elements"]
+                if el.get("tag") == "collapsible_panel" and el.get("expanded") is False]
+
+    def test_master_panel_expanded_and_wraps_all(self):
+        """总开子合：唯一顶层元素是初始展开的总面板，标题带条数与 ALPHA 标记。"""
+        results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安 Alpha 盲盒已上线！")])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-08-26 15:00")
+        master = _root_el(card)[-1]  # 摘要区之后跟一个总面板
+        assert master["tag"] == "collapsible_panel" and master["expanded"] is True
+        assert master["header"]["position"] == "bottom"  # 读到底就地收起
+        title = master["header"]["title"]["content"]
+        assert "折叠全部" in title and "blue" in title  # 蓝字大字号
+        assert "1 帖" in title
+
+    def test_master_panel_title_counts_replies(self):
+        rp = Reply(id="900", text="👉 链接", link="https://x.com/binancezh/status/900",
+                   pub_time="2026-09-01T08:00:00.000Z", parent_id="100",
+                   parent_link="https://x.com/binancezh/status/100",
+                   parent_handle="binancezh", parent_text="原帖")
+        results = [AccountResult(handle="binancezh", tweets=[], replies=[rp])]
+        card = FeishuNotifier._build_new_tweets_card(results, "2026-09-08 21:00")
+        title = _root_el(card)[-1]["header"]["title"]["content"]
+        assert "1 回复" in title and "帖" not in title.split("·")[-1]  # 纯回复批次不显示帖数
 
     def test_each_tweet_wrapped_in_collapsed_panel(self):
         results = [AccountResult(handle="binancezh", tweets=[self._tweet("币安发布季度报告，业绩创新高。")])]
