@@ -1,0 +1,13 @@
+# X-Monitor 依赖清单（由 .venv 冻结导出，2026-10-14，uv pip freeze）
+# 直接依赖：nodriver（抓取）、pytest（测试）；其余为传递依赖
+# 重建环境：uv venv --python 3.12 .venv && uv pip install -r requirements.txt
+deprecated==3.0.0
+iniconfig==2.3.1
+mss==10.2.0
+nodriver==0.50.3
+packaging==26.3
+pluggy==1.6.0
+pygments==2.21.0
+pytest==9.1.1
+websockets==17.2
+wrapt==2.5.1
