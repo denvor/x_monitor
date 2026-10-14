@@ -6,3 +6,4 @@ backup/
 logs/
 .claude/
 CLAUDE.md
+.venv/
