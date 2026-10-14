@@ -108,7 +108,7 @@
  │     ├─ 等待推文元素出现（article / tweetText，30s）
  │     │
  │     ├─ 提取推文列表（JS evaluate）
- │     │   ├─ 跳过置顶推文（UserPin / tweetWithIntentHeader）
+ │     │   ├─ 跳过置顶推文（socialContext「已置顶」文案；旧版 UserPin/tweetWithIntentHeader 作回退）
  │     │   ├─ 取前 3 条普通推文
  │     │   ├─ 推文 ID（从 /status/ 提取）
  │     │   ├─ 推文内容
@@ -153,7 +153,7 @@
 | 推送上限 | 3 条 | 每次最多推送 3 条推文 |
 | MAX_RETRIES | 2 | 单账号最大重试次数（共 3 次尝试） |
 | RETRY_DELAY | 3s | 重试间隔 |
-| 置顶过滤 | 全部检查 | 过滤 UserPin / tweetWithIntentHeader |
+| 置顶过滤 | 全部检查 | 过滤 socialContext「已置顶」/ 旧版 UserPin / tweetWithIntentHeader |
 
 ---
 
@@ -280,7 +280,7 @@ python3 x_monitor_nodriver.py
 - ✅ Chrome 自动启动（Xvfb 虚拟显示器 + nodriver 自启 Chrome）
 - ✅ Cookie 注入（CDP Network.setCookies，绕过 nodriver 检测）
 - ✅ 推文去重（数值 ID 比较）
-- ✅ 置顶推文过滤（UserPin / tweetWithIntentHeader）
+- ✅ 置顶推文过滤（2026-10 起 X 改用 socialContext「已置顶」标记；旧版 UserPin / tweetWithIntentHeader 保留回退）
 - ✅ 重试机制（3 次尝试，3 秒间隔）
 - ✅ 结构化日志（文件 + 控制台）
 - ✅ 飞书消息推送（REST API + token 缓存，全部为交互卡片）
@@ -304,7 +304,7 @@ python3 x_monitor_nodriver.py
 | 限制 | 说明 | 影响 |
 |------|------|------|
 | 仅抓取主页时间线 | 不进入单条推文详情页 | 无法获取评论/转发数 |
-| 最多 3 条 | 每次只抓取并推送 3 条非置顶推文 | 如果 30 分钟内超过 3 条，部分推文可能跳过 |
+| 最多 3 条 | 每次只抓取并推送 3 条非置顶推文 | 如果 30 分钟内超过 3 条，部分推文可能跳过；且缓存水位为已抓最大 ID，被挤出窗口的推文不会被自动找回（2026-10-14 事故：cron 中断积压 + 置顶占坑 → Alpha 帖漏推，需人工补推） |
 | 需要 Xvfb | 无图形界面环境需要安装 Xvfb | xvfb 包依赖 |
 | X 反爬风险 | X 可能变更 DOM 结构或反爬策略 | 选择器可能失效 |
 | Cookie 过期 | cookies.json 中的 cookie 会过期 | 需定期从浏览器更新 cookie |
@@ -323,6 +323,6 @@ python3 x_monitor_nodriver.py
 
 ---
 
-*文档版本: v4.10*
-*最后更新: 2026-09-25*
-*上次更新说明: 卡片迁移 JSON 2.0，双层折叠「总开子合」——摘要常显、明细收进底部带「折叠全部」标题栏的总面板、逐条子面板默认收起（结构照抄 aihot_daily_push.py 实测方案）*
+*文档版本: v4.11*
+*最后更新: 2026-10-14*
+*上次更新说明: 修复置顶帖过滤失效——X 改版移除 UserPin/tweetWithIntentHeader，「已置顶」改由 socialContext 文案承载；抓取 JS 适配并保留旧标记回退，实盘验证置顶帖不再抢占抓取窗口*

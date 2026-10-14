@@ -14,6 +14,7 @@ sys.path.insert(0, _SCRIPT_DIR)
 
 from x_monitor_nodriver import (
     _parse_proxy,
+    BrowserSession,
     Config,
     classify_alpha,
     AlphaCategory,
@@ -664,3 +665,20 @@ class TestResolvedWatermark:
 
     def test_empty(self):
         assert _resolved_watermark([], set(), 200) == 200
+
+
+class TestTweetExtractJsPinFilter:
+    """置顶过滤守护。2026-10-14 实盘：X 移除 UserPin/tweetWithIntentHeader，
+    「已置顶」改由 socialContext 承载，旧过滤整体失效致置顶帖抢占抓取窗口。"""
+
+    def test_skips_social_context_pin(self):
+        js = BrowserSession.TWEET_EXTRACT_JS
+        assert "socialContext" in js
+        assert "置顶" in js
+        assert "Pinned" in js
+
+    def test_keeps_legacy_pin_selectors(self):
+        # 保留旧标记检测作为回退（X 可能改回或双语环境差异）
+        js = BrowserSession.TWEET_EXTRACT_JS
+        assert "UserPin" in js
+        assert "tweetWithIntentHeader" in js

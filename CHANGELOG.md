@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.11] - 2026-10-14
+
+### Fixed
+- **置顶帖过滤失效**：X 改版后 `UserPin`/`tweetWithIntentHeader` 标记从 DOM 消失，「已置顶」改由 `[data-testid="socialContext"]` 文案承载；旧过滤识别不了导致置顶旧帖抢占 3 条抓取窗口（叠加 cron 中断积压，Alpha 竞赛帖被挤出且被数值水位永久跳过）。`TWEET_EXTRACT_JS` 新增 socialContext 文案判定（`/置顶|Pinned/i`，只认置顶字样、不误伤「XX 转推了」语境行），旧选择器保留作回退。新增 2 个 JS 守护测试（68 个全绿），并对 @binancezh/@binancewallet 实盘验证置顶帖已被跳过
+
 ## [4.10] - 2026-09-25
 
 ### Changed

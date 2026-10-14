@@ -512,12 +512,18 @@ class BrowserSession:
     _browser: Optional["uc.Browser"] = None
 
     # Extract newest N tweets, skipping pinned tweets and deduplicating by link.
+    # 置顶标记实盘演进（2026-10-14）：X 移除了 UserPin/tweetWithIntentHeader，
+    # 「已置顶」改为 article 内 socialContext 文案；旧选择器保留作回退。
+    # 只认文案含置顶/Pinned 的 socialContext，不误伤转推语境行（如「XX 转推了」）。
     TWEET_EXTRACT_JS = """(() => {
         const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
-        const normal = articles.filter(a =>
-            !a.querySelector('[data-testid="UserPin"]') &&
-            !a.querySelector('[data-testid="tweetWithIntentHeader"]')
-        );
+        const isPinned = (a) => {
+            if (a.querySelector('[data-testid="UserPin"]') ||
+                a.querySelector('[data-testid="tweetWithIntentHeader"]')) return true;
+            const sc = a.querySelector('[data-testid="socialContext"]');
+            return !!(sc && /置顶|Pinned/i.test(sc.textContent || ''));
+        };
+        const normal = articles.filter(a => !isPinned(a));
         const seen = new Set();
         return normal.slice(0, {count}).reduce((acc, article) => {
             let link = '';
