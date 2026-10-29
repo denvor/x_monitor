@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.12] - 2026-10-29
+
+### Added
+- **Alpha 分类新增「Pre-TGE 认购」**（`AlphaCategory.PRE_TGE`）：锚定 `pre-tge`/`pretge` 字样（双语帖实测，如 @binancezh/@BinanceWallet 的 PREDICT Prime Sale 帖）。因认购帖常蹭「Alpha 积分」等字样，判定置于所有类别**最高优先级**。历史帖回归扫描无误伤（backup 中 3 条含 pre-tge 全部正确归入），71 个单测全绿
+- 对 10-28 曾按普通帖推送的两条 PREDICT Pre-TGE 帖完成补推（带 🔴 ALPHA 标注）；新类别生效后二者同时自动进入 Alpha 楼内回复监控池
+
 ## [4.11] - 2026-10-14
 
 ### Fixed

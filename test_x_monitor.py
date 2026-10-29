@@ -148,6 +148,23 @@ class TestConfigChromeSection:
 
 
 class TestClassifyAlpha:
+    def test_pre_tge_chinese(self):
+        # 实盘 2115345515898675233 @binancezh（Pre-TGE Prime Sale，含「Alpha 积分」字样也须归 PreTGE）
+        assert classify_alpha(
+            "预告预告！#币安钱包 Prime Sale Pre-TGE 来了 - 上线 @predictdotfun (PREDICT)！"
+            "认购资格：符合资格的用户须使用币安 Alpha 积分参与"
+        ) is AlphaCategory.PRE_TGE
+
+    def test_pre_tge_english(self):
+        # 实盘 2115345773865181458 @BinanceWallet
+        assert classify_alpha(
+            "Join the Pre-TGE Prime Sale Edition on #BinanceWallet with @predictdotfun (PREDICT). "
+            "Eligible users need Binance Alpha Points to participate"
+        ) is AlphaCategory.PRE_TGE
+
+    def test_pre_tge_variant_without_hyphen(self):
+        assert classify_alpha("Get in early: PreTGE round opens tomorrow.") is AlphaCategory.PRE_TGE
+
     def test_non_incentive_returns_none(self):
         """A general news post should not be classified."""
         assert classify_alpha("币安发布 8 月季度报告，业绩创新高。") is None
