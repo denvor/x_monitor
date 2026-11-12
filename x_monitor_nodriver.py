@@ -108,18 +108,23 @@ class AlphaCategory(Enum):
     BOOSTER = "Booster 活动"
     POINTS_REDEMPTION = "积分兑换"
     PRE_TGE = "Pre-TGE 认购"
+    TGE = "TGE 活动"
 
 
 def classify_alpha(text: str) -> Optional[AlphaCategory]:
     """将推文正文分类为币安 Alpha 激励类型。
 
     命中任一类别返回对应的 AlphaCategory；不匹配返回 None。
-    按优先级匹配（Pre-TGE > Booster > 盲盒 > 积分兑换 > 空投 Wave > 空投提醒 > 新币上线）。
+    按优先级匹配（Pre-TGE > TGE > Booster > 盲盒 > 积分兑换 > 空投 Wave > 空投提醒 > 新币上线）。
     """
     txt = text.lower()
-    # Pre-TGE 认购帖常蹭「Alpha 积分」等字样，须最先判定（实盘锚点：2026-10-29 PREDICT 双语帖）
+    # Pre-TGE 认购帖常蹭「Alpha 积分」等字样，须先于 Booster/盲盒等判定（实盘锚点：2026-10-29 PREDICT 双语帖）
     if "pre-tge" in txt or "pretge" in txt:
         return AlphaCategory.PRE_TGE
+    # TGE 活动通知（实盘锚点：2026-11-12 PREDICT 双语帖）常与 Pre-TGE 同属一个项目周期，
+    # 且正文多含「空投/Alpha 积分」等蹭词，须先于空投类判定以防被抢走
+    if "tge" in txt:
+        return AlphaCategory.TGE
     if "booster" in txt:
         return AlphaCategory.BOOSTER
     # 「盲盒」须伴随 alpha 上下文，防活动文案蹭词误报（如 referral 礼品的"惊喜盲盒"）

@@ -165,6 +165,29 @@ class TestClassifyAlpha:
     def test_pre_tge_variant_without_hyphen(self):
         assert classify_alpha("Get in early: PreTGE round opens tomorrow.") is AlphaCategory.PRE_TGE
 
+    def test_tge_chinese(self):
+        # 实盘 2120781341243650266 @binancezh（PREDICT TGE 活动通知）
+        assert classify_alpha(
+            ".@predictdotfun（PREDICT）TGE 活动将于 2026 年 11 月 18 日 17:00（UTC+8）开始。"
+            "已成功领取 Prime Sale Key 的用户，届时可前往币安 Alpha 账户查看 PREDICT 代币余额并进行交易。"
+        ) is AlphaCategory.TGE
+
+    def test_tge_english(self):
+        # 实盘 2120781504465014809 @BinanceWallet
+        assert classify_alpha(
+            "The @predictdotfun (PREDICT) TGE event will resume at 9:00 AM (UTC) on November 18, 2026. "
+            "Users who have claimed Prime Sale Keys can check their balance and start trading "
+            "PREDICT tokens on Binance Alpha as soon as the token goes live."
+        ) is AlphaCategory.TGE
+
+    def test_tge_anchor_only(self):
+        # 仅「TGE」字样、无 pre-tge 前缀，也应归入 TGE 活动
+        assert classify_alpha("The TGE is scheduled for next Tuesday, stay tuned.") is AlphaCategory.TGE
+
+    def test_tge_with_airdrop_context_not_misrouted(self):
+        # 含 airdrop/积分等蹭词时仍须归 TGE（防止被空投类抢走）
+        assert classify_alpha("TGE 活动开始，届时可领取币安 Alpha 空投并交易") is AlphaCategory.TGE
+
     def test_non_incentive_returns_none(self):
         """A general news post should not be classified."""
         assert classify_alpha("币安发布 8 月季度报告，业绩创新高。") is None

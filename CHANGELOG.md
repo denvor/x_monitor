@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.13] - 2026-11-12
+
+### Added
+- **Alpha 分类新增「TGE 活动」**（`AlphaCategory.TGE`）：锚定 `tge` 字样（实盘锚点：@binancezh 2120781341243650266 / @BinanceWallet 2120781504465014809 的 PREDICT TGE 活动通知）。TGE 通知常与 Pre-TGE 同属一个项目周期、正文多含「空投/Alpha 积分」等蹭词，判定置于 Pre-TGE 之后、其余类别之前，防被空投类抢走。历史帖回归扫描无误伤（backup 中 3 条含 tge 全部正确归入，其中 GRVT TGE 为既往真公告），75 个单测全绿
+
 ## [4.12] - 2026-10-29
 
 ### Added
